@@ -52,20 +52,20 @@ app.get('/ebay/search', async (req, res) => {
     const { q, condition = '', limit = 15 } = req.query;
     if (!q) return res.status(400).json({ error: 'Missing q parameter' });
 
-    // Map condition string to eBay Finding API condition IDs
+    // Map condition string to eBay Finding API condition filter (use index 1 to avoid collision with SoldItemsOnly at index 0)
     const condLower = condition.toLowerCase();
-    let conditionId = '';
+    let conditionFilter = '';
     if (condLower.includes('new') && !condLower.includes('open')) {
-      conditionId = '&itemFilter(0).name=Condition&itemFilter(0).value=New';
+      conditionFilter = '&itemFilter(1).name=Condition&itemFilter(1).value(0)=1000';
     } else if (condLower.includes('open')) {
-      conditionId = '&itemFilter(0).name=Condition&itemFilter(0).value=New+other+(see+details)';
+      conditionFilter = '&itemFilter(1).name=Condition&itemFilter(1).value(0)=1500&itemFilter(1).value(1)=1750';
     } else if (condLower.includes('dam') || condLower.includes('brok') || condLower.includes('part')) {
-      conditionId = '&itemFilter(0).name=Condition&itemFilter(0).value=For+parts+or+not+working';
+      conditionFilter = '&itemFilter(1).name=Condition&itemFilter(1).value(0)=7000';
     } else if (condLower.includes('used') || condLower.includes('good') || condLower.includes('fair')) {
-      conditionId = '&itemFilter(0).name=Condition&itemFilter(0).value=Used';
+      conditionFilter = '&itemFilter(1).name=Condition&itemFilter(1).value(0)=3000&itemFilter(1).value(1)=4000&itemFilter(1).value(2)=5000&itemFilter(1).value(3)=6000';
     }
 
-    // Finding API — findCompletedItems returns SOLD listings only
+    // findCompletedItems + SoldItemsOnly=true = only actually sold listings
     const url = `https://svcs.ebay.com/services/search/FindingService/v1` +
       `?OPERATION-NAME=findCompletedItems` +
       `&SERVICE-VERSION=1.0.0` +
@@ -73,14 +73,19 @@ app.get('/ebay/search', async (req, res) => {
       `&RESPONSE-DATA-FORMAT=JSON` +
       `&keywords=${encodeURIComponent(q)}` +
       `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
-      `${conditionId}` +
+      conditionFilter +
       `&paginationInput.entriesPerPage=${limit}` +
       `&sortOrder=EndTimeSoonest`;
 
+    console.log(`[eBay] Searching sold: "${q}"`);
     const ebayRes = await fetch(url);
     const data = await ebayRes.json();
 
-    const items = data?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item;
+    const searchResult = data?.findCompletedItemsResponse?.[0]?.searchResult?.[0];
+    const items = searchResult?.item;
+    const totalEntries = data?.findCompletedItemsResponse?.[0]?.paginationOutput?.[0]?.totalEntries?.[0];
+
+    console.log(`[eBay] Total entries: ${totalEntries}, Items returned: ${items?.length || 0}`);
 
     if (!items || items.length === 0) {
       return res.json({ found: false, avg: null, min: null, max: null, count: 0 });
@@ -90,6 +95,8 @@ app.get('/ebay/search', async (req, res) => {
       .filter(i => i.sellingStatus?.[0]?.currentPrice?.[0]?.__value__)
       .map(i => parseFloat(i.sellingStatus[0].currentPrice[0].__value__))
       .filter(p => p > 0);
+
+    console.log(`[eBay] Prices extracted: ${prices.length}`);
 
     if (prices.length === 0) {
       return res.json({ found: false, avg: null, min: null, max: null, count: 0 });
@@ -115,7 +122,28 @@ app.get('/ebay/search', async (req, res) => {
   }
 });
 
-// ── eBay Challenge Verification (GET) ──────────────────────────────────────
+// ── eBay Debug — returns raw Finding API response ─────────────────────────
+app.get('/ebay/debug', async (req, res) => {
+  const q = req.query.q || 'ipad pro';
+  const url = `https://svcs.ebay.com/services/search/FindingService/v1` +
+    `?OPERATION-NAME=findCompletedItems` +
+    `&SERVICE-VERSION=1.0.0` +
+    `&SECURITY-APPNAME=${EBAY_CLIENT_ID}` +
+    `&RESPONSE-DATA-FORMAT=JSON` +
+    `&keywords=${encodeURIComponent(q)}` +
+    `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
+    `&paginationInput.entriesPerPage=3`;
+  try {
+    const r = await fetch(url);
+    const text = await r.text();
+    res.set('Content-Type', 'application/json');
+    res.send(text);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
 app.get('/ebay/deletion', (req, res) => {
   const challengeCode = req.query.challenge_code;
   if (!challengeCode) return res.status(400).json({ error: 'Missing challenge_code' });
