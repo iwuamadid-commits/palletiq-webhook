@@ -1026,10 +1026,11 @@ function App() {
         let awake = false;
         for (let attempt = 0; attempt < 10; attempt++) {
           try {
-            const r = await fetch(base + '/');
-            if (r.ok) { awake = true; break; }
-          } catch(e) { /* still waking */ }
-          await new Promise(r => setTimeout(r, 10000)); // wait 10s between attempts
+            await fetch(base + '/');
+            awake = true; // any response means server is up
+            break;
+          } catch(e) { /* still waking, wait and retry */ }
+          await new Promise(r => setTimeout(r, 10000));
         }
         console.log(awake ? '[PalletIQ] eBay server ready' : '[PalletIQ] eBay server did not respond — prices will be estimated');
       }
