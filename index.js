@@ -52,41 +52,43 @@ app.get('/ebay/search', async (req, res) => {
     const { q, condition = '', limit = 15 } = req.query;
     if (!q) return res.status(400).json({ error: 'Missing q parameter' });
 
-    const token = await getEbayToken();
-
-    // Map condition string to eBay condition filter
+    // Map condition string to eBay Finding API condition IDs
     const condLower = condition.toLowerCase();
-    let condFilter = '';
+    let conditionId = '';
     if (condLower.includes('new') && !condLower.includes('open')) {
-      condFilter = ',conditions:{NEW}';
+      conditionId = '&itemFilter(0).name=Condition&itemFilter(0).value=New';
     } else if (condLower.includes('open')) {
-      condFilter = ',conditions:{LIKE_NEW|OPEN_BOX}';
+      conditionId = '&itemFilter(0).name=Condition&itemFilter(0).value=New+other+(see+details)';
     } else if (condLower.includes('dam') || condLower.includes('brok') || condLower.includes('part')) {
-      condFilter = ',conditions:{FOR_PARTS_OR_NOT_WORKING}';
+      conditionId = '&itemFilter(0).name=Condition&itemFilter(0).value=For+parts+or+not+working';
     } else if (condLower.includes('used') || condLower.includes('good') || condLower.includes('fair')) {
-      condFilter = ',conditions:{USED_EXCELLENT|USED_VERY_GOOD|USED_GOOD|USED_ACCEPTABLE}';
+      conditionId = '&itemFilter(0).name=Condition&itemFilter(0).value=Used';
     }
 
-    const filter = `buyingOptions:{FIXED_PRICE}${condFilter}`;
-    const url = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(q)}&limit=${limit}&filter=${encodeURIComponent(filter)}`;
+    // Finding API — findCompletedItems returns SOLD listings only
+    const url = `https://svcs.ebay.com/services/search/FindingService/v1` +
+      `?OPERATION-NAME=findCompletedItems` +
+      `&SERVICE-VERSION=1.0.0` +
+      `&SECURITY-APPNAME=${EBAY_CLIENT_ID}` +
+      `&RESPONSE-DATA-FORMAT=JSON` +
+      `&keywords=${encodeURIComponent(q)}` +
+      `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
+      `${conditionId}` +
+      `&paginationInput.entriesPerPage=${limit}` +
+      `&sortOrder=EndTimeSoonest`;
 
-    const ebayRes = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
-        'Content-Type': 'application/json'
-      }
-    });
-
+    const ebayRes = await fetch(url);
     const data = await ebayRes.json();
 
-    if (!data.itemSummaries || data.itemSummaries.length === 0) {
+    const items = data?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item;
+
+    if (!items || items.length === 0) {
       return res.json({ found: false, avg: null, min: null, max: null, count: 0 });
     }
 
-    const prices = data.itemSummaries
-      .filter(i => i.price?.value)
-      .map(i => parseFloat(i.price.value))
+    const prices = items
+      .filter(i => i.sellingStatus?.[0]?.currentPrice?.[0]?.__value__)
+      .map(i => parseFloat(i.sellingStatus[0].currentPrice[0].__value__))
       .filter(p => p > 0);
 
     if (prices.length === 0) {
