@@ -1,0 +1,1548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PalletIQ — Manifest Analyzer</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>html,body{margin:0;padding:0;height:100%;overflow:hidden;}#root{height:100%;}</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef, useCallback, useEffect } = React;
+
+// Load SheetJS from CDN
+function useXLSX() {
+  const [ready, setReady] = useState(!!window.XLSX);
+  useEffect(() => {
+    if (window.XLSX) { setReady(true); return; }
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload = () => setReady(true);
+    document.head.appendChild(s);
+  }, []);
+  return ready;
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Barlow+Condensed:wght@400;600;700;800&family=Barlow:wght@400;500;600&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d0e0f;--surf:#141618;--surf2:#1c1f22;
+  --bdr:#2a2d31;--bdr2:#363a3f;
+  --amber:#f5a623;--amber2:#b87a1a;
+  --green:#3ecf6e;--red:#e05252;--blue:#4a9eff;
+  --txt:#e8eaed;--dim:#b0b6c3;--muted:#9aa0ac;
+  --mono:'IBM Plex Mono',monospace;
+  --sans:'Barlow',sans-serif;
+  --disp:'Barlow Condensed',sans-serif;
+}
+body{background:var(--bg);color:var(--txt);font-family:var(--sans);min-height:100vh}
+.app{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+.hdr{border-bottom:1px solid var(--bdr);padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:56px;background:var(--surf);position:sticky;top:0;z-index:100}
+.logo{font-family:var(--disp);font-size:22px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--amber)}
+.logo span{color:var(--dim);font-weight:400}
+.nav{display:flex;gap:4px}
+.nb{padding:6px 14px;border-radius:4px;border:none;cursor:pointer;font-family:var(--disp);font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;background:transparent;color:var(--dim);transition:all .15s}
+.back-btn{margin-left:auto;color:var(--amber)!important;border:1px solid var(--amber)!important;padding:4px 14px!important;border-radius:4px}
+.back-btn:hover{background:rgba(245,166,35,.12)!important}
+.nb:hover{background:var(--surf2);color:var(--txt)}
+.nb.on{background:var(--amber);color:#000}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;padding:24px;max-width:1400px;margin:0 auto;width:100%}
+.drop{border:2px dashed var(--bdr2);border-radius:8px;padding:48px;text-align:center;cursor:pointer;transition:all .2s;background:var(--surf);margin-bottom:24px}
+.drop:hover,.drop.drag{border-color:var(--amber);background:#1a1500}
+.drop-ico{font-size:40px;margin-bottom:12px}
+.drop-ttl{font-family:var(--disp);font-size:22px;font-weight:700;margin-bottom:6px}
+.drop-sub{font-size:13px;color:var(--dim)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-bottom:24px}
+.card{background:var(--surf);border:1px solid var(--bdr);border-radius:8px;padding:20px;cursor:pointer;transition:all .15s;position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--amber)}
+.card:hover{border-color:var(--amber2);transform:translateY(-1px)}
+.card.sel{border-color:var(--amber);background:#1a1400}
+.card-name{font-family:var(--disp);font-size:18px;font-weight:700;margin-bottom:4px;margin-right:56px}
+.card-meta{font-size:12px;color:var(--dim);margin-bottom:16px}
+.cstats{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.cstat{background:var(--surf2);border-radius:4px;padding:10px}
+.cstat-l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px}
+.cstat-v{font-family:var(--mono);font-size:15px;font-weight:600}
+.cstat-v.g{color:var(--green)}.cstat-v.a{color:var(--amber)}
+.sbadge{position:absolute;top:16px;right:16px;width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:14px;font-weight:600;border:2px solid}
+.sa{border-color:var(--green);color:var(--green);background:#0a2016}
+.sb{border-color:var(--amber);color:var(--amber);background:#1a1200}
+.sc{border-color:var(--red);color:var(--red);background:#1f0a0a}
+.sd{border-color:#e05252;color:#e05252;background:#1f0a0a}
+.sf{border-color:#c03030;color:#c03030;background:#1a0505}
+.ph{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;gap:16px;flex-wrap:wrap}
+.pt{font-family:var(--disp);font-size:26px;font-weight:800}
+.pt span{color:var(--dim);font-weight:400;font-size:18px;margin-left:8px}
+.sbar{display:flex;gap:12px;flex-wrap:wrap;background:var(--surf);border:1px solid var(--bdr);border-radius:8px;padding:16px;margin-bottom:12px}
+.si{flex:1;min-width:120px}
+.sl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px}
+.sv{font-family:var(--mono);font-size:18px;font-weight:600}
+.sv.g{color:var(--green)}.sv.a{color:var(--amber)}.sv.b{color:var(--blue)}
+.sdiv{width:1px;background:var(--bdr);align-self:stretch}
+.spanel{background:var(--surf);border:1px solid var(--bdr);border-radius:8px;padding:20px;margin-bottom:12px}
+.spanel-ttl{font-family:var(--disp);font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px;color:var(--dim)}
+.sgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.sitem{background:var(--surf2);border-radius:6px;padding:12px}
+.sitem-l{font-size:11px;color:var(--muted);margin-bottom:6px}
+.sbar2{height:6px;background:var(--bdr);border-radius:3px;margin-bottom:6px}
+.sfill{height:100%;border-radius:3px;background:var(--amber)}
+.sitem-v{font-family:var(--mono);font-size:13px;font-weight:600}
+.analysis-wrap{flex:1;overflow:auto;min-height:0}
+.sticky-zone{position:sticky;top:0;z-index:50;background:var(--bg);padding-bottom:8px;border-bottom:2px solid var(--bdr2)}
+.twrap{overflow:visible;border-radius:8px;border:1px solid var(--bdr)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead{background:var(--surf2)}
+th{padding:10px 14px;text-align:left;font-family:var(--disp);font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--bdr2);white-space:nowrap;position:sticky;top:0;z-index:20;background:var(--surf2)}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--txt);background:var(--bdr)}
+th.sorted{color:var(--amber)}
+.tip-wrap{display:inline-flex;align-items:center;gap:4px}
+.tip-icon{width:13px;height:13px;border-radius:50%;background:var(--bdr2);color:var(--dim);font-size:9px;font-family:var(--mono);display:inline-flex;align-items:center;justify-content:center;cursor:default;flex-shrink:0;font-weight:700;margin-left:2px;line-height:1}
+.tip-portal{position:fixed;background:#23272e;border:1px solid var(--bdr2);border-radius:6px;padding:8px 11px;font-size:11px;color:#e8eaed;font-family:'Barlow',sans-serif;font-weight:400;letter-spacing:0;text-transform:none;z-index:9999;line-height:1.5;box-shadow:0 4px 16px rgba(0,0,0,.6);max-width:220px;pointer-events:none;}
+td{padding:8px 14px;border-bottom:1px solid var(--bdr);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--surf2)}
+.iname{font-weight:500;color:var(--txt);max-width:220px;line-height:1.3}
+.mono{font-family:var(--mono)}
+.pimg{width:56px;height:56px;border-radius:6px;background:var(--surf2);border:1px solid var(--bdr);display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0;overflow:hidden}
+.tag{display:inline-block;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.tfb{background:#1a2a40;color:#4a9eff}
+.teb{background:#1a1400;color:var(--amber)}
+.tfm{background:#2a1a00;color:#f0a050}
+.taz{background:#0d2010;color:var(--green)}
+.tof{background:#2a1a30;color:#c080ff}
+.risk{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.rlo{background:#0d2010;color:var(--green)}
+.rme{background:#1a1400;color:var(--amber)}
+.rhi{background:#1f0a0a;color:var(--red)}
+.dbar{display:flex;align-items:center;gap:6px}
+.dbg{flex:1;height:4px;background:var(--bdr);border-radius:2px;max-width:60px}
+.dbf{height:100%;border-radius:2px}
+.cgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.ccard{background:var(--surf);border:1px solid var(--bdr);border-radius:8px;overflow:hidden}
+.chead{background:var(--surf2);border-bottom:1px solid var(--bdr);padding:16px 20px}
+.cname{font-family:var(--disp);font-size:20px;font-weight:800}
+.crow{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--bdr)}
+.crow:last-child{border-bottom:none}
+.crow-l{font-size:12px;color:var(--dim)}
+.crow-v{font-family:var(--mono);font-size:14px;font-weight:600}
+.win{color:var(--green)}.lose{color:var(--muted)}
+.lov{position:fixed;inset:0;background:rgba(0,0,0,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;gap:16px}
+.ltxt{font-family:var(--disp);font-size:20px;font-weight:700;color:var(--amber);margin-bottom:6px}
+.lsub{font-size:13px;color:var(--dim);text-align:center;max-width:320px;line-height:1.5;margin-bottom:20px}
+.scene{width:380px;text-align:center;user-select:none}
+.scene-title{font-family:var(--disp);font-size:22px;font-weight:800;color:var(--amber);margin-bottom:6px;letter-spacing:.04em}
+.scene-msg{font-size:13px;color:var(--dim);margin-bottom:20px;min-height:18px}
+.prog-track{width:100%;height:6px;background:var(--bdr);border-radius:3px;overflow:hidden;margin-top:16px;margin-bottom:6px}
+.prog-inner{height:100%;border-radius:3px;background:linear-gradient(90deg,#b87a1a,#f5a623,#ffd060);transition:width 0.5s ease}
+.prog-pct{font-family:var(--mono);font-size:12px;color:var(--amber);text-align:right}
+.btn{padding:8px 18px;border-radius:5px;border:none;cursor:pointer;font-family:var(--disp);font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;transition:all .15s}
+.bp{background:var(--amber);color:#000}.bp:hover{background:#ffc04a}
+.bg{background:transparent;color:var(--dim);border:1px solid var(--bdr)}.bg:hover{border-color:var(--dim);color:var(--txt)}
+.bd{background:transparent;color:var(--red);border:1px solid var(--red);font-size:11px;padding:5px 10px}.bd:hover{background:var(--red);color:#fff}
+.acts{display:flex;gap:8px;margin-top:14px}
+.empty{text-align:center;padding:60px 20px;color:var(--dim)}
+.eico{font-size:36px;margin-bottom:12px}
+.ettl{font-family:var(--disp);font-size:20px;font-weight:700;color:var(--txt);margin-bottom:6px}
+.notecell{font-size:11px;color:var(--muted);max-width:180px;line-height:1.4}
+.stsbar{background:#0d1800;border:1px solid #1a3000;border-radius:4px;padding:8px 14px;font-size:12px;color:#6aaa20;margin-bottom:16px;font-family:var(--mono)}
+.apikey-btn{background:transparent;border:1px solid var(--bdr);border-radius:4px;padding:4px 10px;font-family:var(--disp);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);cursor:pointer;transition:all .15s}
+.apikey-btn:hover{border-color:var(--amber);color:var(--amber)}
+.apikey-bar{background:var(--surf2);border-bottom:1px solid var(--bdr);padding:10px 24px;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--dim)}
+.apikey-input{flex:1;max-width:420px;background:var(--surf);border:1px solid var(--bdr);border-radius:4px;padding:5px 10px;font-family:var(--mono);font-size:12px;color:var(--txt);outline:none}
+.apikey-input:focus{border-color:var(--amber)}
+.apikey-ok{width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0}
+.apikey-no{width:8px;height:8px;border-radius:50%;background:var(--red);flex-shrink:0}
+.errbar{background:#1f0808;border:1px solid #5a1a1a;border-radius:4px;padding:12px 16px;font-size:13px;color:var(--red);margin-bottom:16px;line-height:1.5}
+.listing-bar{display:flex;align-items:center;gap:8px;background:var(--surf);border:1px solid var(--bdr);border-radius:6px;padding:10px 14px;margin-bottom:16px}
+.listing-bar-label{font-size:11px;color:var(--dim);font-family:var(--disp);font-weight:700;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.listing-input{flex:1;background:transparent;border:none;outline:none;font-family:var(--mono);font-size:12px;color:var(--txt);min-width:0}
+.listing-input::placeholder{color:var(--muted)}
+.listing-link{font-size:12px;color:var(--amber);text-decoration:none;white-space:nowrap;font-family:var(--disp);font-weight:700;letter-spacing:.04em}
+.listing-link:hover{text-decoration:underline}
+.listing-dot{width:6px;height:6px;border-radius:50%;background:var(--bdr2);flex-shrink:0}
+.summary-panel{background:var(--surf);border:1px solid var(--bdr);border-radius:8px;padding:20px;margin-bottom:16px}
+.summary-verdict{display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+.verdict-badge{font-family:var(--disp);font-size:28px;font-weight:800;padding:8px 20px;border-radius:6px;letter-spacing:.06em}
+.verdict-badge.buy{background:#0d2010;color:var(--green);border:2px solid var(--green)}
+.verdict-badge.caution{background:#1a1400;color:var(--amber);border:2px solid var(--amber)}
+.verdict-badge.pass{background:#1f0a0a;color:var(--red);border:2px solid var(--red)}
+.verdict-text{flex:1;min-width:200px}
+.verdict-headline{font-family:var(--disp);font-size:18px;font-weight:700;margin-bottom:4px}
+.verdict-reason{font-size:13px;color:var(--dim);line-height:1.5}
+.anchor-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:16px;padding-top:16px;border-top:1px solid var(--bdr)}
+.anchor-tile{background:var(--surf2);border-radius:6px;padding:10px 14px;border-left:3px solid var(--amber);transition:background .15s,border-color .15s}
+.anchor-tile:hover{background:rgba(245,166,35,.12);border-left-color:var(--amber);box-shadow:inset 0 0 0 1px rgba(245,166,35,.25)}
+.anchor-tile-name{font-size:12px;font-weight:600;color:var(--txt);margin-bottom:4px;line-height:1.3}
+.anchor-tile-rev{font-family:var(--mono);font-size:15px;font-weight:700;color:var(--green)}
+.anchor-tile-meta{font-size:10px;color:var(--muted);margin-top:2px}
+.anchor-summary{font-size:12px;color:var(--dim);margin-bottom:8px}
+.asking-bar{display:flex;align-items:center;gap:12px;background:var(--surf);border:1px solid var(--bdr);border-radius:6px;padding:10px 14px;margin-bottom:12px;flex-wrap:wrap}
+.asking-field{display:flex;align-items:center;gap:8px}
+.asking-label{font-size:11px;color:var(--amber);font-family:var(--disp);font-weight:700;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.asking-prefix{font-family:var(--mono);font-size:13px;color:var(--dim)}
+.asking-input{background:transparent;border:none;outline:none;font-family:var(--mono);font-size:14px;font-weight:600;color:var(--txt);width:110px}
+.asking-input::placeholder{color:var(--muted);font-weight:400}
+.asking-divider{width:1px;height:24px;background:var(--bdr);flex-shrink:0}
+.asking-verdict{display:flex;align-items:center;gap:6px;font-size:12px}
+.verdict-good{color:var(--green);font-weight:700;font-family:var(--disp);font-size:14px;letter-spacing:.04em}
+.verdict-warn{color:var(--amber);font-weight:700;font-family:var(--disp);font-size:14px;letter-spacing:.04em}
+.verdict-bad{color:var(--red);font-weight:700;font-family:var(--disp);font-size:14px;letter-spacing:.04em}
+.verdict-sub{color:var(--dim);font-size:11px;font-family:var(--mono)}
+`;
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const CAT_EMOJI = {
+  "Power Tools":"🔧","Small Appliances":"🍳","Electronics":"📱",
+  "Baby Gear":"🍼","Furniture":"🛋️","Gaming":"🎮",
+  "Clothing":"👕","Kitchen":"🥘","Office":"🖨️",
+  "Health":"💊","Other":"📦",
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const f$ = n => n==null ? "—" : "$"+Number(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const fP = n => n==null ? "—" : (n*100).toFixed(1)+"%";
+
+function gradeOf(n) {
+  if (n>=80) return {g:"A",cls:"sa"};
+  if (n>=65) return {g:"B",cls:"sb"};
+  if (n>=50) return {g:"C",cls:"sc"};
+  if (n>=35) return {g:"D",cls:"sd"};
+  return {g:"F",cls:"sf"};
+}
+const dColor = d => d>=7?"#3ecf6e":d>=4?"#f5a623":"#e05252";
+
+function mpTag(mp="") {
+  const m=mp.toLowerCase();
+  if (m.includes("facebook")&&m.includes("ebay")) return {cls:"tof",label:"eBay + FB"};
+  if (m.includes("facebook")) return {cls:"tfb",label:"FB Marketplace"};
+  if (m.includes("ebay"))     return {cls:"teb",label:"eBay"};
+  if (m.includes("flea")||m.includes("swap")) return {cls:"tfm",label:"Flea Market"};
+  if (m.includes("amazon"))   return {cls:"taz",label:"Amazon"};
+  return {cls:"tof",label:mp||"eBay"};
+}
+function riskOf(r="medium") {
+  const v=r.toLowerCase();
+  if (v==="low")  return {cls:"rlo",label:"Low"};
+  if (v==="high") return {cls:"rhi",label:"High"};
+  return {cls:"rme",label:"Medium"};
+}
+
+function normalizeCondition(raw) {
+  if (!raw) return "";
+  const s = raw.toLowerCase().replace(/_/g," ").trim();
+  if (s.includes("new")) return "New";
+  if (s.includes("open")) return "Open Box";
+  if (s.includes("like new")||s.includes("excellent")) return "Like New";
+  if (s.includes("good")) return "Used - Good";
+  if (s.includes("fair")||s.includes("acceptable")) return "Used - Fair";
+  if (s.includes("poor")||s.includes("damaged")||s.includes("brok")) return "Damaged";
+  if (s.includes("refurb")) return "Refurbished";
+  if (s.includes("used")) return "Used";
+  return raw.trim();
+}
+
+function parseSheet(data) {
+  if (!data||data.length<2) return {items:[], lotId:""};
+  let hi=0;
+  while (hi<data.length&&data[hi].every(c=>!c)) hi++;
+  const headers=data[hi].map(h=>String(h||"").toLowerCase().trim());
+
+  // Score each column for likelihood of being the item name
+  // Higher = better match. Penalize columns that are clearly NOT names.
+  const nameScore = (h) => {
+    if (h==="item #"||h==="item#"||h==="item no"||h==="item number"||h==="sku"||h==="upc"||h==="asin") return -1;
+    if (h.includes("description")||h.includes("item desc")||h.includes("product name")||h.includes("item name")) return 10;
+    if (h.includes("title")) return 8;
+    if (h.includes("product")) return 6;
+    if (h.includes("name")) return 5;
+    if (h==="item") return 3;
+    if (h.includes("item")) return 1;
+    return 0;
+  };
+  let ni=-1, bestScore=-99;
+  headers.forEach((h,i)=>{ const sc=nameScore(h); if(sc>bestScore){bestScore=sc;ni=i;} });
+  if (bestScore<0) ni=-1;
+
+  // Qty — prefer exact "qty" over "units" (units can be a price unit label)
+  const find=(...keys)=>headers.findIndex(h=>keys.some(k=>h===k||h.includes(k)));
+  const findExact=(...keys)=>headers.findIndex(h=>keys.some(k=>h===k));
+  let qi = findExact("qty","quantity","count","pcs");
+  if (qi<0) qi = find("qty","quantity","count","units","pcs");
+
+  // Retail — prefer "unit retail" over "ext retail" / "extended"
+  const unitRi = headers.findIndex(h=>h.includes("unit retail")||h.includes("unit price")||h.includes("msrp")||h.includes("suggested retail"));
+  const extRi  = headers.findIndex(h=>h.includes("ext")&&h.includes("retail"));
+  const genRi  = find("retail","price","value","cost");
+  // Pick unit retail > general retail > extended (ext retail is qty*price, we don't want that)
+  let ri = unitRi>=0 ? unitRi : (genRi>=0 && genRi!==extRi) ? genRi : extRi;
+
+  const ci = find("cond","grade","status","qual");
+  const lotCol = findExact("lot id","lot#","lot number","lot no");
+
+  if (ni<0) return {items:[], lotId:""};
+
+  // Extract lot ID from first data row if column exists
+  const firstData = data[hi+1];
+  const lotId = (lotCol>=0 && firstData) ? String(firstData[lotCol]||"").trim() : "";
+
+  const items = data.slice(hi+1)
+    .filter(row=>row[ni]&&String(row[ni]).trim())
+    .map((row,i)=>({
+      id:i,
+      name:String(row[ni]).trim(),
+      qty:Math.max(1,parseInt(row[qi])||1),
+      retail:parseFloat(String(row[ri]||"0").replace(/[$,\s]/g,""))||0,
+      condition:normalizeCondition(ci>=0?String(row[ci]||""):""),
+      category:null,demand:null,resalePct:null,
+      marketplace:null,risk:null,notes:null,isAnchor:false,
+    }));
+
+  return {items, lotId};
+}
+
+function dedupeItems(items) {
+  const mergeLog = [];
+  const groups = {};
+  items.forEach(item => {
+    const key = item.name.toLowerCase().trim() + "||" + item.retail;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(item);
+  });
+
+  const merged = [];
+  // Track names that appear with multiple prices (flag only)
+  const nameGroups = {};
+  items.forEach(item => {
+    const n = item.name.toLowerCase().trim();
+    if (!nameGroups[n]) nameGroups[n] = new Set();
+    nameGroups[n].add(item.retail);
+  });
+
+  const seen = new Set();
+  items.forEach(item => {
+    const key = item.name.toLowerCase().trim() + "||" + item.retail;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const group = groups[key];
+    const namePriceConflict = nameGroups[item.name.toLowerCase().trim()].size > 1;
+
+    if (group.length === 1) {
+      merged.push(item);
+      return;
+    }
+
+    if (namePriceConflict) {
+      // Same name, different prices elsewhere — flag but don't merge
+      mergeLog.push({ type: "flag", name: item.name, count: group.length, retail: item.retail, reason: "price differs across rows" });
+      group.forEach(i => merged.push(i));
+      return;
+    }
+
+    // Merge: sum qty, combine conditions
+    const totalQty = group.reduce((s, i) => s + i.qty, 0);
+    const conditions = [...new Set(group.map(i => i.condition).filter(Boolean))];
+    const combinedCondition = conditions.length === 0 ? "" : conditions.join(" / ");
+    const condNote = conditions.length > 1 ? " (conditions varied: " + combinedCondition + ")" : "";
+
+    mergeLog.push({ type: "merge", name: item.name, count: group.length, retail: item.retail, totalQty, condNote });
+    merged.push({ ...group[0], qty: totalQty, condition: combinedCondition });
+  });
+
+  // Re-index IDs
+  merged.forEach((item, i) => item.id = i);
+  return { items: merged, mergeLog };
+}
+
+function calcScores(items) {
+  const ai=items.filter(i=>i.demand!=null);
+  const avgDemand=ai.length?ai.reduce((s,i)=>s+i.demand,0)/ai.length:5;
+  const anchorCount=items.filter(i=>i.isAnchor).length;
+  const rm={low:3,medium:2,high:1};
+  const avgRisk=ai.length?ai.reduce((s,i)=>s+(rm[(i.risk||"").toLowerCase()]||2),0)/ai.length:2;
+  const totalRevenue=items.reduce((s,i)=>s+(i.retail*(i.resalePct||0.3))*i.qty,0);
+  const totalRetail=items.reduce((s,i)=>s+i.retail*i.qty,0);
+  const dScore=Math.round((avgDemand/10)*30);
+  const aScore=Math.round(Math.min(items.length?anchorCount/items.length*3:0,1)*25);
+  const rScore=Math.round(((avgRisk-1)/2)*25);
+  const mScore=totalRetail>0?Math.round(Math.min(totalRevenue/totalRetail/0.4,1)*20):10;
+  const anchorRevenue=items.filter(i=>i.isAnchor).reduce((s,i)=>s+(i.retail*(i.resalePct||0.3))*i.qty,0);
+  const anchorItems=items.filter(i=>i.isAnchor);
+  const highRiskCount=items.filter(i=>(i.risk||"").toLowerCase()==="high").length;
+  const total=dScore+aScore+rScore+mScore;
+  return {
+    totalRetail,totalRevenue,anchorRevenue,anchorItems,highRiskCount,
+    maxBidSafe:totalRevenue*0.50,
+    maxBidAgg:totalRevenue*0.60,
+    avgDemand,anchorCount,
+    dScore,aScore,rScore,mScore,
+    total,
+  };
+}
+
+// ── PDF + Share ──────────────────────────────────────────────────────────────
+async function shareReport(manifest) {
+  const s = manifest.scores;
+  const {g} = gradeOf(s.total);
+  let badge;
+  if(s.total>=75&&s.avgDemand>=6&&s.highRiskCount<=3) badge="STRONG BUY";
+  else if(s.total>=65) badge="GOOD BUY";
+  else if(s.total>=50) badge="PROCEED WITH CAUTION";
+  else if(s.total>=35) badge="HIGH RISK";
+  else badge="WALK AWAY";
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
+  const W = doc.internal.pageSize.getWidth();
+  const margin = 36;
+  let y = margin;
+
+  // ── helpers
+  const col = (hex) => {
+    const r=parseInt(hex.slice(1,3),16), g2=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+    return [r,g2,b];
+  };
+  const line = (x1,y1,x2,y2,c=[200,200,200]) => { doc.setDrawColor(...c); doc.line(x1,y1,x2,y2); };
+  const text = (str, x, yy, opts={}) => {
+    str = String(str||"");
+    doc.text(str, x, yy, opts);
+  };
+
+  // ── Header bar
+  doc.setFillColor(13,14,15);
+  doc.rect(0,0,W,44,"F");
+  doc.setTextColor(245,166,35);
+  doc.setFont("helvetica","bold");
+  doc.setFontSize(18);
+  text("PALLETIQ", margin, 28);
+  doc.setTextColor(176,182,195);
+  doc.setFont("helvetica","normal");
+  doc.setFontSize(10);
+  text("Manifest Analysis Report", margin+90, 28);
+  doc.setTextColor(200,200,200);
+  doc.setFontSize(9);
+  text(new Date().toLocaleDateString(), W-margin, 28, {align:"right"});
+  y = 62;
+
+  // ── Manifest name + meta
+  doc.setTextColor(232,234,237);
+  doc.setFillColor(20,22,24);
+  doc.rect(margin-8, y-14, W-margin*2+16, 32, "F");
+  doc.setFont("helvetica","bold"); doc.setFontSize(14); doc.setTextColor(232,234,237);
+  text(manifest.name, margin, y);
+  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(176,182,195);
+  const meta = [manifest.date, manifest.items.length+" items", "Grade "+g, manifest.lotId&&"Lot: "+manifest.lotId, manifest.listingUrl].filter(Boolean).join("  ·  ");
+  text(meta, margin, y+14);
+  y += 40;
+
+  // ── Verdict badge
+  const badgeColor = badge.includes("BUY") ? [62,207,110] : badge.includes("CAUTION")||badge.includes("RISK") ? [245,166,35] : [224,82,82];
+  doc.setDrawColor(...badgeColor); doc.setLineWidth(1.5);
+  doc.roundedRect(margin, y, 180, 22, 3, 3, "S");
+  doc.setTextColor(...badgeColor); doc.setFont("helvetica","bold"); doc.setFontSize(11);
+  text(badge, margin+90, y+15, {align:"center"});
+  y += 34;
+
+  // ── Stats grid (6 boxes)
+  const stats = [
+    ["TOTAL MSRP", f$(s.totalRetail), [150,150,150]],
+    ["EST. REVENUE", f$(s.totalRevenue), [62,207,110]],
+    ["SAFE MAX BID", f$(s.maxBidSafe), [245,166,35]],
+    ["AGGRESSIVE BID", f$(s.maxBidAgg), [74,158,255]],
+    ["ANCHOR ITEMS", s.anchorCount+" / "+manifest.items.length, [200,200,200]],
+    ["SCORE", s.total+"/100  "+g, s.total>=65?[62,207,110]:s.total>=50?[245,166,35]:[224,82,82]],
+  ];
+  if(manifest.askingPrice>0) stats.push(["ASKING PRICE", f$(manifest.askingPrice), manifest.askingPrice<=s.maxBidSafe?[62,207,110]:[224,82,82]]);
+  const bw = (W - margin*2 - 8*(stats.length-1)) / stats.length;
+  stats.forEach(([label,val,clr],i)=>{
+    const bx = margin + i*(bw+8);
+    doc.setFillColor(28,31,34); doc.roundedRect(bx,y,bw,36,2,2,"F");
+    doc.setDrawColor(42,45,49); doc.roundedRect(bx,y,bw,36,2,2,"S");
+    doc.setFont("helvetica","normal"); doc.setFontSize(7); doc.setTextColor(154,160,172);
+    text(label, bx+bw/2, y+10, {align:"center"});
+    doc.setFont("helvetica","bold"); doc.setFontSize(10); doc.setTextColor(...clr);
+    text(val, bx+bw/2, y+26, {align:"center"});
+  });
+  y += 48;
+
+  // ── Score breakdown
+  const scores = [
+    ["DEMAND QUALITY", s.dScore, 30],
+    ["ANCHOR DENSITY", s.aScore, 25],
+    ["RISK PROFILE", s.rScore, 25],
+    ["MARGIN POTENTIAL", s.mScore, 20],
+  ];
+  const sw = (W - margin*2 - 12*3) / 4;
+  scores.forEach(([label,val,max],i)=>{
+    const bx = margin + i*(sw+12);
+    doc.setFillColor(28,31,34); doc.roundedRect(bx,y,sw,28,2,2,"F");
+    doc.setFont("helvetica","normal"); doc.setFontSize(7); doc.setTextColor(154,160,172);
+    text(label, bx+8, y+10);
+    text(max+"pts max", bx+sw-8, y+10, {align:"right"});
+    // bar track
+    doc.setFillColor(42,45,49); doc.roundedRect(bx+8,y+14,sw-16,4,1,1,"F");
+    doc.setFillColor(245,166,35); doc.roundedRect(bx+8,y+14,(sw-16)*(val/max),4,1,1,"F");
+    doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(232,234,237);
+    text(val+"pts", bx+8, y+24);
+  });
+  y += 38;
+
+  // ── Anchor items
+  if(s.anchorItems && s.anchorItems.length>0){
+    doc.setFont("helvetica","bold"); doc.setFontSize(8); doc.setTextColor(154,160,172);
+    text("ANCHOR ITEMS", margin, y); y+=10;
+    const aw = (W - margin*2 - 8*(s.anchorItems.length-1)) / Math.min(s.anchorItems.length,5);
+    s.anchorItems.slice(0,5).forEach((item,i)=>{
+      const ax = margin + i*(aw+8);
+      const rev = item.retail*(item.resalePct||0.3)*item.qty;
+      doc.setFillColor(20,22,24); doc.roundedRect(ax,y,aw,34,2,2,"F");
+      doc.setDrawColor(245,166,35); doc.setLineWidth(0.5);
+      doc.line(ax,y+2,ax,y+32);
+      doc.setFont("helvetica","bold"); doc.setFontSize(8); doc.setTextColor(232,234,237);
+      const nameLines = doc.splitTextToSize(item.name, aw-14);
+      text(nameLines[0], ax+8, y+11);
+      doc.setTextColor(62,207,110); doc.setFontSize(10);
+      text(f$(rev), ax+8, y+24);
+      doc.setTextColor(154,160,172); doc.setFontSize(7); doc.setFont("helvetica","normal");
+      text("Qty "+item.qty+" · "+Math.round((item.resalePct||0.3)*100)+"% resale", ax+aw-8, y+24, {align:"right"});
+    });
+    y += 44;
+  }
+
+  // ── Items table
+  doc.setFont("helvetica","bold"); doc.setFontSize(8); doc.setTextColor(154,160,172);
+  text("ITEM BREAKDOWN", margin, y); y+=8;
+
+  const cols = [
+    {label:"",w:14},
+    {label:"ITEM NAME",w:160},
+    {label:"QTY",w:28},
+    {label:"COND",w:36},
+    {label:"MSRP",w:52},
+    {label:"RESALE%",w:44},
+    {label:"UNIT REV",w:52},
+    {label:"TOTAL REV",w:56},
+    {label:"DEMAND",w:42},
+    {label:"MARKET",w:60},
+    {label:"RISK",w:32},
+    {label:"NOTES",w:0}, // fill remaining
+  ];
+  const fixedW = cols.slice(0,-1).reduce((s,c)=>s+c.w,0);
+  cols[cols.length-1].w = W - margin*2 - fixedW;
+
+  // Header row
+  doc.setFillColor(28,31,34);
+  doc.rect(margin, y, W-margin*2, 14, "F");
+  let cx = margin;
+  doc.setFont("helvetica","bold"); doc.setFontSize(7); doc.setTextColor(154,160,172);
+  cols.forEach(c=>{ text(c.label, cx+4, y+10); cx+=c.w; });
+  y+=14;
+
+  // Data rows
+  manifest.items.forEach((item,idx)=>{
+    if(y > doc.internal.pageSize.getHeight()-40){
+      doc.addPage();
+      y = 36;
+    }
+    const uRev = item.retail*(item.resalePct||0);
+    const tRev = uRev*item.qty;
+    const rowH = 14;
+    if(idx%2===0){ doc.setFillColor(22,24,26); doc.rect(margin,y,W-margin*2,rowH,"F"); }
+    cx = margin;
+    doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(232,234,237);
+    const vals = [
+      item.isAnchor?"*":"",
+      item.name,
+      String(item.qty),
+      item.condition||"",
+      f$(item.retail),
+      fP(item.resalePct),
+      f$(uRev),
+      f$(tRev),
+      (item.demand||"?")+"/10",
+      (item.marketplace||"eBay").slice(0,10),
+      (item.risk||"med").slice(0,3).toUpperCase(),
+      (item.notes||"").slice(0,60),
+    ];
+    vals.forEach((val,vi)=>{
+      const c = cols[vi];
+      if(vi===7) doc.setTextColor(62,207,110);
+      else if(vi===10){ const r=(item.risk||"").toLowerCase(); doc.setTextColor(r==="high"?[224,82,82]:r==="low"?[62,207,110]:[245,166,35]); }
+      else doc.setTextColor(232,234,237);
+      const clipped = doc.splitTextToSize(String(val), c.w-6)[0]||"";
+      text(clipped, cx+4, y+10);
+      cx+=c.w;
+    });
+    line(margin, y+rowH, W-margin, y+rowH);
+    y+=rowH;
+  });
+
+  // Footer
+  y += 12;
+  doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(100,100,100);
+  text("Generated by PalletIQ · "+new Date().toLocaleString(), margin, y);
+  text("* = Anchor item", W-margin, y, {align:"right"});
+
+  // ── Share or download
+  const pdfBlob = doc.output("blob");
+  const fileName = "PalletIQ-"+manifest.name.replace(/[^a-z0-9]/gi,"-")+".pdf";
+  const url = URL.createObjectURL(pdfBlob);
+  const a = document.createElement("a"); a.href=url; a.download=fileName; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 5000);
+}
+
+// ── Claude API ────────────────────────────────────────────────────────────────
+async function analyzeItems(items, apiKey, onProgress) {
+  const BATCH = 40; // safe batch size for Haiku
+  const batches = [];
+  for(let i=0; i<items.length; i+=BATCH) batches.push(items.slice(i,i+BATCH));
+
+  let allResults = [];
+  for(let b=0; b<batches.length; b++) {
+    const batch = batches[b];
+    const offset = b * BATCH;
+    const list = batch.map((it,i) =>
+      `${offset+i}. "${it.name}" Qty:${it.qty} MSRP:$${it.retail} Cond:"${it.condition||"unknown"}"`
+    ).join("\n");
+
+    const prompt = `You are a professional liquidation resale analyst for the US market.
+Return ONLY a raw JSON array. No markdown. No backticks. No explanation. Start your response with [ and end with ].
+
+Items (0-indexed, global IDs):
+${list}
+
+Each object must have exactly these fields:
+{
+  "id": <global index number>,
+  "category": <"Power Tools"|"Small Appliances"|"Electronics"|"Baby Gear"|"Furniture"|"Gaming"|"Clothing"|"Kitchen"|"Office"|"Health"|"Other">,
+  "demand": <integer 1-10>,
+  "resale_pct": <float: new=0.42-0.50, open-box=0.28-0.38, used=0.18-0.28, damaged=0.10-0.18>,
+  "marketplace": <"Facebook Marketplace"|"eBay"|"eBay + Facebook"|"Flea Market"|"Amazon">,
+  "risk": <"low"|"medium"|"high">,
+  "is_anchor": <boolean — true if this item could be a top revenue driver>,
+  "notes": <specific resale insight — include sales velocity if known (e.g. "~8 sold/day on eBay"), typical price range (e.g. "sells $45-$80 used"), or a concrete warning. Be specific, never generic.>
+}`;
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 8000,
+        messages: [{role:"user", content:prompt}],
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(()=>({}));
+      throw new Error(`API ${res.status}: ${errBody?.error?.message||'Unknown error'}`);
+    }
+
+    const data = await res.json();
+    const raw = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+    const cleaned = raw.replace(/\`\`\`json/gi,"").replace(/\`\`\`/g,"").trim();
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (!match) {
+      console.error("Batch "+b+" raw response:", raw);
+      throw new Error("No JSON in response — raw: "+raw.slice(0,200));
+    }
+    try {
+      const parsed = JSON.parse(match[0]);
+      allResults = allResults.concat(parsed);
+      if(onProgress) onProgress(20 + ((b+1)/batches.length)*68);
+    } catch(e) {
+      throw new Error("JSON parse failed on batch "+b+": "+e.message);
+    }
+  }
+  return allResults;
+}
+
+
+// ── eBay Browse API Enrichment ────────────────────────────────────────────────
+async function enrichWithEbay(items, serverUrl, onProgress) {
+  if (!serverUrl) return {};
+  const base = serverUrl.replace(/\/$/, '');
+  const results = {};
+  const CONCURRENCY = 4; // run 4 requests at a time
+
+  const chunks = [];
+  for (let i = 0; i < items.length; i += CONCURRENCY) chunks.push(items.slice(i, i + CONCURRENCY));
+
+  let done = 0;
+  for (const chunk of chunks) {
+    await Promise.all(chunk.map(async (item) => {
+      try {
+        const res = await fetch(`${base}/ebay/search?q=${encodeURIComponent(item.name)}&condition=${encodeURIComponent(item.condition||'')}&limit=15`);
+        if (res.ok) {
+          const d = await res.json();
+          if (d.found) results[item.name] = d;
+        }
+      } catch(e) {
+        console.warn('eBay lookup failed for', item.name, e.message);
+      }
+      done++;
+      if (onProgress) onProgress(done / items.length);
+    }));
+  }
+  return results;
+}
+
+// ── ProductImage ─────────────────────────────────────────────────────────────
+function ProductImage({name, category}) {
+  const emoji = CAT_EMOJI[category] || "📦";
+  const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(name)}`;
+  const catColors = {
+    "Power Tools":"#7c3a00","Small Appliances":"#1a3a00","Electronics":"#002a4a",
+    "Baby Gear":"#3a002a","Furniture":"#1a1a00","Gaming":"#1a003a",
+    "Clothing":"#002a2a","Kitchen":"#3a1a00","Office":"#00203a",
+    "Health":"#003a1a","Other":"#1c1f22",
+  };
+  const bg = catColors[category] || "#1c1f22";
+  return (
+    <a href={searchUrl} target="_blank" rel="noopener noreferrer" title={`Search images: ${name}`}
+      style={{textDecoration:"none",display:"block"}}>
+      <div className="pimg" style={{background:bg,flexDirection:"column",gap:2,cursor:"pointer",position:"relative"}}>
+        <span style={{fontSize:22,lineHeight:1}}>{emoji}</span>
+        <span style={{fontSize:8,color:"#aaa",fontFamily:"var(--mono)",letterSpacing:"0.04em"}}>🔍 VIEW</span>
+      </div>
+    </a>
+  );
+}
+
+// ── Tip ──────────────────────────────────────────────────────────────────────
+function Tip({text}) {
+  const [pos,setPos]=useState(null);
+  return (
+    <>
+      <span
+        className="tip-icon"
+        onMouseEnter={e=>{
+          const r=e.currentTarget.getBoundingClientRect();
+          setPos({x:r.left+r.width/2, y:r.bottom+6});
+        }}
+        onMouseLeave={()=>setPos(null)}
+      >?</span>
+      {pos&&ReactDOM.createPortal(
+        <div className="tip-portal" style={{
+          left:Math.min(pos.x, window.innerWidth-240)+'px',
+          top:pos.y+'px',
+          transform:'translateX(-50%)'
+        }}>{text}</div>,
+        document.body
+      )}
+    </>
+  );
+}
+
+// ── ForkliftScene ────────────────────────────────────────────────────────────
+function ForkliftScene({progress}) {
+  const msgs = [
+    "Reading your manifest file…",
+    "Inspecting the pallet…",
+    "Scanning item barcodes…",
+    "Checking resale markets…",
+    "Searching product data…",
+    "Crunching the numbers…",
+    "Scoring your manifest…",
+    "Almost done…",
+  ];
+  const msg = msgs[Math.min(Math.floor(progress / 13), msgs.length - 1)];
+
+  // Forklift X travels from 2% to 68% of the 380px wide SVG
+  const forkX = 8 + (progress / 100) * 220;
+  // Boxes stack up: 0 to 5 boxes as progress goes 0→100
+  const boxCount = Math.floor((progress / 100) * 5);
+
+  return (
+    <div className="scene">
+      <div className="scene-title">PalletIQ is working…</div>
+      <div className="scene-msg">{msg}</div>
+
+      {/* SVG warehouse scene — fixed viewBox, no overlapping divs */}
+      <svg viewBox="0 0 380 120" width="380" height="120" style={{display:"block",margin:"0 auto",overflow:"visible"}}>
+
+        {/* Floor */}
+        <line x1="0" y1="112" x2="380" y2="112" stroke="#363a3f" strokeWidth="2"/>
+        {/* Floor dashes */}
+        {[0,40,80,120,160,200,240,280,320].map(x=>(
+          <line key={x} x1={x} y1="112" x2={x+20} y2="112" stroke="#f5a623" strokeWidth="1" strokeDasharray="4 4" opacity="0.3"/>
+        ))}
+
+        {/* ── PALLET BASE (right side) ── */}
+        <g transform="translate(290,95)">
+          {/* planks */}
+          <rect x="0" y="0" width="72" height="5" rx="1" fill="#8B6914"/>
+          <rect x="0" y="8" width="72" height="5" rx="1" fill="#8B6914"/>
+          {/* legs */}
+          <rect x="4"  y="5" width="14" height="3" fill="#6B4F10"/>
+          <rect x="29" y="5" width="14" height="3" fill="#6B4F10"/>
+          <rect x="54" y="5" width="14" height="3" fill="#6B4F10"/>
+        </g>
+
+        {/* ── STACKED BOXES on pallet ── */}
+        {Array.from({length: Math.min(boxCount, 3)}).map((_, i) => (
+          <g key={`b1-${i}`} transform={`translate(${296 + i*24}, 68)`}>
+            <rect width="20" height="20" rx="2" fill="#f5a623"/>
+            <rect width="20" height="3" rx="1" fill="#ffd060"/>
+            <line x1="10" y1="3" x2="10" y2="20" stroke="#b87a1a" strokeWidth="1" opacity="0.5"/>
+          </g>
+        ))}
+        {/* Second row of boxes */}
+        {Array.from({length: Math.max(0, boxCount - 3)}).map((_, i) => (
+          <g key={`b2-${i}`} transform={`translate(${308 + i*24}, 48)`}>
+            <rect width="20" height="20" rx="2" fill="#e09000"/>
+            <rect width="20" height="3" rx="1" fill="#f5c040"/>
+            <line x1="10" y1="3" x2="10" y2="20" stroke="#a06000" strokeWidth="1" opacity="0.5"/>
+          </g>
+        ))}
+
+        {/* ── FORKLIFT ── */}
+        <g transform={`translate(${forkX}, 112)`} style={{transition:"transform 0.5s cubic-bezier(.4,0,.2,1)"}}>
+          {/* Wheels */}
+          <circle cx="8"  cy="-5" r="6" fill="#222" stroke="#444" strokeWidth="1.5"/>
+          <circle cx="8"  cy="-5" r="2" fill="#555"/>
+          <circle cx="36" cy="-5" r="6" fill="#222" stroke="#444" strokeWidth="1.5"/>
+          <circle cx="36" cy="-5" r="2" fill="#555"/>
+          {/* Body */}
+          <rect x="2" y="-26" width="38" height="21" rx="3" fill="#f5a623"/>
+          {/* Cab window */}
+          <rect x="6" y="-23" width="14" height="12" rx="2" fill="#1c1f22" opacity="0.7"/>
+          {/* Driver */}
+          <text x="28" y="-13" fontSize="13" textAnchor="middle">🧑</text>
+          {/* Mast */}
+          <rect x="40" y="-58" width="5" height="52" rx="1" fill="#555"/>
+          <rect x="43" y="-58" width="2" height="52" rx="1" fill="#888" opacity="0.5"/>
+          {/* Forks */}
+          <rect x="45" y="-22" width="22" height="3" rx="1" fill="#999"/>
+          <rect x="45" y="-15" width="22" height="3" rx="1" fill="#999"/>
+          {/* Box on forks (disappears near end) */}
+          {progress < 85 && (
+            <g transform="translate(47,-38)">
+              <rect width="18" height="18" rx="2" fill="#f5a623" stroke="#ffd060" strokeWidth="1"/>
+              <rect width="18" height="3" rx="1" fill="#ffd060"/>
+              <line x1="9" y1="3" x2="9" y2="18" stroke="#b87a1a" strokeWidth="1" opacity="0.6"/>
+            </g>
+          )}
+        </g>
+
+        {/* Warehouse shelves bg */}
+        <rect x="0" y="0" width="60" height="110" fill="#1c1f22" opacity="0.5" rx="2"/>
+        <rect x="5" y="10" width="50" height="6" rx="1" fill="#2a2d31"/>
+        <rect x="5" y="35" width="50" height="6" rx="1" fill="#2a2d31"/>
+        <rect x="5" y="60" width="50" height="6" rx="1" fill="#2a2d31"/>
+        <rect x="10" y="16" width="12" height="18" rx="1" fill="#f5a623" opacity="0.6"/>
+        <rect x="26" y="16" width="12" height="18" rx="1" fill="#e09000" opacity="0.5"/>
+        <rect x="10" y="41" width="12" height="18" rx="1" fill="#f5a623" opacity="0.4"/>
+        <rect x="26" y="41" width="8"  height="18" rx="1" fill="#f5a623" opacity="0.3"/>
+
+      </svg>
+
+      <div className="prog-track">
+        <div className="prog-inner" style={{width:`${progress}%`}}/>
+      </div>
+      <div className="prog-pct">{progress}%</div>
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+function MergeBanner({log}) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  const merges = log.filter(l => l.type === "merge");
+  const flags  = log.filter(l => l.type === "flag");
+  return (
+    <div style={{background:"#1a1400",border:"1px solid #f5a623",borderRadius:6,padding:"10px 14px",marginBottom:12,fontSize:12,lineHeight:1.6,position:"relative"}}>
+      <button onClick={()=>setDismissed(true)} style={{position:"absolute",top:8,right:10,background:"none",border:"none",color:"var(--dim)",cursor:"pointer",fontSize:16,lineHeight:1}}>×</button>
+      {merges.length>0&&<>
+        <div style={{fontFamily:"var(--disp)",fontWeight:700,fontSize:11,letterSpacing:".06em",color:"var(--amber)",marginBottom:4}}>🔀 DUPLICATE ROWS MERGED</div>
+        {merges.map((l,i)=>(
+          <div key={i} style={{color:"var(--dim)"}}>
+            <span style={{color:"var(--txt)",fontWeight:600}}>{l.name}</span> — {l.count} rows collapsed into 1 · Qty: {l.totalQty}{l.condNote&&<span style={{color:"var(--muted)"}}>{l.condNote}</span>}
+          </div>
+        ))}
+      </>}
+      {flags.length>0&&<>
+        <div style={{fontFamily:"var(--disp)",fontWeight:700,fontSize:11,letterSpacing:".06em",color:"var(--amber)",marginTop:merges.length?8:0,marginBottom:4}}>⚠ POSSIBLE DUPLICATES — NOT MERGED</div>
+        {flags.map((l,i)=>(
+          <div key={i} style={{color:"var(--dim)"}}>
+            <span style={{color:"var(--txt)",fontWeight:600}}>{l.name}</span> — {l.count} rows with same name but different prices. Review manually.
+          </div>
+        ))}
+      </>}
+    </div>
+  );
+}
+
+function App() {
+  const xlsxReady=useXLSX();
+  const [view,setView]=useState("manifests");
+  const [apiKey,setApiKey]=useState(()=>(localStorage.getItem('palletiq_apikey')||'').trim().replace(/[^\x20-\x7E]/g,''));
+  const [ebayServer,setEbayServer]=useState(()=>localStorage.getItem('palletiq_ebayserver')||'https://palletiq-webhook.onrender.com');
+  const [showKeyInput,setShowKeyInput]=useState(false);
+  const [manifests,setManifests]=useState(()=>{
+    try{
+      const saved=localStorage.getItem('palletiq_manifests');
+      return saved?JSON.parse(saved):[];
+    }catch{return [];}
+  });
+  const [active,setActive]=useState(null);
+  const [cmpIds,setCmpIds]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [loadMsg,setLoadMsg]=useState("");
+  const [progress,setProgress]=useState(0);
+  const [drag,setDrag]=useState(false);
+  const [err,setErr]=useState(null);
+  const [sortCol,setSortCol]=useState(null);
+  const [summaryOpen,setSummaryOpen]=useState(true);
+  const [highlight,setHighlight]=useState(null);
+  const tableRef=useRef(null);
+  useEffect(()=>{
+    if(!highlight||!tableRef.current) return;
+    const row=tableRef.current.querySelector(`[data-id="${highlight.id}"]`);
+    if(!row) return;
+    const tds=row.querySelectorAll('td');
+    tds.forEach(td=>{td.style.transition='none';td.style.background='rgba(245,166,35,0.30)';});
+    const t1=setTimeout(()=>{
+      tds.forEach(td=>{td.style.transition='background 1.6s ease';td.style.background='';});
+    },50);
+    return ()=>{clearTimeout(t1);tds.forEach(td=>{td.style.transition='';td.style.background='';});};
+  },[highlight]);
+  const [sortDir,setSortDir]=useState('desc');
+  const fileRef=useRef();
+  const stickyRef=useRef();
+  const [stickyH,setStickyH]=useState(0);
+
+  // Measure sticky-zone height so table headers can stick below it
+  useEffect(()=>{
+    if(!stickyRef.current) return;
+    const obs=new ResizeObserver(()=>setStickyH(stickyRef.current?.offsetHeight||0));
+    obs.observe(stickyRef.current);
+    setStickyH(stickyRef.current.offsetHeight);
+    return ()=>obs.disconnect();
+  },[active,view]);
+
+  useEffect(()=>{
+    if(apiKey) localStorage.setItem('palletiq_apikey', apiKey);
+  },[apiKey]);
+
+  useEffect(()=>{
+    localStorage.setItem('palletiq_ebayserver', ebayServer);
+  },[ebayServer]);
+
+  // Persist manifests to localStorage on every change
+  useEffect(()=>{
+    try{ localStorage.setItem('palletiq_manifests', JSON.stringify(manifests)); }
+    catch(e){ console.warn('localStorage save failed:', e); }
+  },[manifests]);
+
+  const open=(m)=>{setActive(m);setView("analysis");setSortCol(null);setSummaryOpen(true);setHighlight(null);};
+  const updateListingUrl=(id,url)=>{
+    setManifests(prev=>prev.map(m=>m.id===id?{...m,listingUrl:url}:m));
+    if(active?.id===id) setActive(prev=>({...prev,listingUrl:url}));
+  };
+  const testKey=async()=>{
+    if(!apiKey){alert("No API key entered.");return;}
+    try{
+      const r=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json",
+          "x-api-key":apiKey,
+          "anthropic-version":"2023-06-01",
+          "anthropic-dangerous-direct-browser-access":"true"
+        },
+        body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:10,messages:[{role:"user",content:"Hi"}]})
+      });
+      const d=await r.json();
+      if(r.ok) alert("✅ Key works! API connected successfully.");
+      else alert("❌ API error "+r.status+": "+JSON.stringify(d?.error?.message));
+    }catch(e){alert("❌ Fetch error: "+e.message);}
+  };
+  const updateLotId=(id,val)=>{
+    setManifests(prev=>prev.map(m=>m.id===id?{...m,lotId:val}:m));
+    if(active?.id===id) setActive(prev=>({...prev,lotId:val}));
+  };
+  const updateAskingPrice=(id,val)=>{
+    const n=parseFloat(val)||0;
+    setManifests(prev=>prev.map(m=>m.id===id?{...m,askingPrice:n}:m));
+    if(active?.id===id) setActive(prev=>({...prev,askingPrice:n}));
+  };
+  const handleSort=(col)=>{
+    if(sortCol===col){setSortDir(d=>d==='asc'?'desc':'asc');}
+    else{setSortCol(col);setSortDir('desc');}
+  };
+  const sortedItems=(items)=>{
+    if(!sortCol) return items;
+    return [...items].sort((a,b)=>{
+      let av,bv;
+      if(sortCol==='name'){av=a.name.toLowerCase();bv=b.name.toLowerCase();}
+      else if(sortCol==='qty'){av=a.qty;bv=b.qty;}
+      else if(sortCol==='retail'){av=a.retail;bv=b.retail;}
+      else if(sortCol==='resalePct'){av=a.resalePct;bv=b.resalePct;}
+      else if(sortCol==='unitRev'){av=a.retail*a.resalePct;bv=b.retail*b.resalePct;}
+      else if(sortCol==='totalRev'){av=a.retail*a.resalePct*a.qty;bv=b.retail*b.resalePct*b.qty;}
+      else if(sortCol==='demand'){av=a.demand;bv=b.demand;}
+      else if(sortCol==='risk'){const r={low:1,medium:2,high:3};av=r[a.risk]||2;bv=r[b.risk]||2;}
+      else if(sortCol==='anchor'){av=a.isAnchor?1:0;bv=b.isAnchor?1:0;}
+      else{av=0;bv=0;}
+      if(av<bv) return sortDir==='asc'?-1:1;
+      if(av>bv) return sortDir==='asc'?1:-1;
+      return 0;
+    });
+  };
+
+  const processFile=useCallback(async(file)=>{
+    if (!file||!xlsxReady) return;
+    setErr(null);setLoading(true);setProgress(5);setLoadMsg("Reading file…");
+    try {
+      const ab=await file.arrayBuffer();
+      const wb=window.XLSX.read(ab,{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const raw=window.XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+      const {items: parsedItems, lotId: sheetLotId} = parseSheet(raw);
+      if (!parsedItems.length) throw new Error("Couldn't detect columns. Make sure your file has: Item Name, Qty, and Retail/MSRP price headers.");
+      const {items, mergeLog} = dedupeItems(parsedItems);
+
+      setProgress(20);
+
+      // ── Wake eBay server and WAIT for it to respond before starting ────────
+      if (ebayServer) {
+        setLoadMsg("Waking eBay price server…");
+        const base = ebayServer.replace(/\/$/, '');
+        let awake = false;
+        for (let attempt = 0; attempt < 10; attempt++) {
+          try {
+            const r = await fetch(base + '/');
+            if (r.ok) { awake = true; break; }
+          } catch(e) { /* still waking */ }
+          await new Promise(r => setTimeout(r, 10000)); // wait 10s between attempts
+        }
+        console.log(awake ? '[PalletIQ] eBay server ready' : '[PalletIQ] eBay server did not respond — prices will be estimated');
+      }
+
+      setLoadMsg(`Analyzing ${items.length} items with AI + image search…`);
+      // Animate progress during AI call
+      let prog=20;
+      setProgress(20);
+      let aiRes=[];
+      try { aiRes=await analyzeItems(items, apiKey, (p)=>{prog=p;setProgress(Math.round(p));}); }
+      catch(e){ console.warn("AI error:",e.message); setErr("AI analysis failed: "+e.message+" — check your API key and try again."); }
+
+      // ── eBay price enrichment ──────────────────────────────────────────────
+      let ebayData = {};
+      if (ebayServer) {
+        setProgress(88); setLoadMsg(`Fetching real eBay prices for ${items.length} items…`);
+        try {
+          ebayData = await enrichWithEbay(items, ebayServer, (frac) => {
+            setProgress(Math.round(88 + frac * 6));
+          });
+        } catch(e) { console.warn("eBay enrichment error:", e.message); }
+      }
+
+      setProgress(95);setLoadMsg("Building manifest…");
+
+      const condFall=(c="")=>{
+        const lc=c.toLowerCase();
+        if (lc.includes("new")) return 0.45;
+        if (lc.includes("open")) return 0.32;
+        if (lc.includes("dam")||lc.includes("brok")) return 0.15;
+        return 0.30;
+      };
+
+      const enriched=items.map((item,i)=>{
+        const ai=aiRes.find(r=>Number(r.id)===i)||{};
+        const eb=ebayData[item.name]||null;
+        // Use eBay avg price to derive resalePct if available
+        const ebayResalePct = eb && item.retail>0 ? Math.min(0.95, eb.avg/item.retail) : null;
+        return {
+          ...item,
+          category:  ai.category   ||"Other",
+          demand:    ai.demand     ||5,
+          resalePct: ebayResalePct || ai.resale_pct ||condFall(item.condition),
+          marketplace:ai.marketplace||"eBay",
+          risk:      ai.risk       ||"medium",
+          isAnchor:  !!ai.is_anchor,
+          notes:     ai.notes      ||"",
+          ebayAvg:   eb?.avg||null,
+          ebayMin:   eb?.min||null,
+          ebayMax:   eb?.max||null,
+          ebayCount: eb?.count||0,
+        };
+      });
+
+      const mf={
+        id:Date.now(),
+        name:file.name.replace(/\.[^.]+$/,""),
+        date:new Date().toLocaleDateString(),
+        items:enriched,
+        scores:calcScores(enriched),
+        listingUrl:"",
+        mergeLog,
+        askingPrice:0,
+        lotId:sheetLotId||"",
+      };
+      setManifests(prev=>[...prev,mf]);
+      setActive(mf);
+      setProgress(100);
+      await new Promise(r=>setTimeout(r,300));
+      setView("analysis");
+    } catch(e){
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+      setProgress(0);
+    }
+  },[xlsxReady, apiKey]);
+
+  const onDrop=(e)=>{e.preventDefault();setDrag(false);processFile(e.dataTransfer.files[0]);};
+  const toggleCmp=(id)=>setCmpIds(prev=>prev.includes(id)?prev.filter(x=>x!==id):prev.length<2?[...prev,id]:[prev[1],id]);
+  const delMf=(id)=>{
+    setManifests(prev=>prev.filter(m=>m.id!==id));
+    setCmpIds(prev=>prev.filter(x=>x!==id));
+    if (active?.id===id){setActive(null);setView("manifests");}
+  };
+  const cmpPair=manifests.filter(m=>cmpIds.includes(m.id));
+
+  return (
+    <>
+      <style>{CSS}</style>
+      <div className="app">
+
+        {/* Header */}
+        <header className="hdr">
+          <div className="logo">Pallet<span>IQ</span></div>
+          <nav className="nav">
+            <button className={`nb ${view==="manifests"?"on":""}`} onClick={()=>setView("manifests")}>Manifests</button>
+            {active&&<button className={`nb ${view==="analysis"?"on":""}`} onClick={()=>setView("analysis")}>Analysis</button>}
+            {view==="analysis"&&<button className="nb back-btn" onClick={()=>setView("manifests")}>← Back to Manifests</button>}
+            {manifests.length>=2&&<button className={`nb ${view==="compare"?"on":""}`} onClick={()=>setView("compare")}>Compare</button>}
+          </nav>
+        </header>
+
+        {/* API Key bar */}
+        {showKeyInput?(
+          <div className="apikey-bar">
+            <span style={{whiteSpace:"nowrap"}}>🔑 Anthropic API Key:</span>
+            <input className="apikey-input" type="password" placeholder="sk-ant-..." value={apiKey} onChange={e=>setApiKey(e.target.value.trim().replace(/[^\x20-\x7E]/g,""))} autoFocus/>
+            {apiKey?<span className="apikey-ok" title="Key saved"/>:<span className="apikey-no" title="No key"/>}
+            <span style={{color:"var(--muted)",fontSize:11,marginLeft:8,whiteSpace:"nowrap"}}>🛒 eBay Server:</span>
+            <input className="apikey-input" type="text" placeholder="https://palletiq-webhook.onrender.com" value={ebayServer} onChange={e=>setEbayServer(e.target.value.trim())}/>
+            {ebayServer?<span className="apikey-ok" title="eBay server set"/>:<span className="apikey-no" title="No eBay server"/>}
+            <span style={{color:"var(--muted)",fontSize:11}}>Saved to browser.</span>
+            <button className="apikey-btn" onClick={()=>setShowKeyInput(false)}>Done</button>
+          </div>
+        ):(
+          <div style={{borderBottom:"1px solid var(--bdr)",padding:"6px 24px",background:"var(--surf)",display:"flex",alignItems:"center",gap:8}}>
+            {apiKey
+              ? <><span className="apikey-ok"/><span style={{fontSize:11,color:"var(--dim)"}}>Key: {apiKey.slice(0,10)}…{apiKey.slice(-4)}</span></>
+              : <><span className="apikey-no"/><span style={{fontSize:11,color:"var(--red)"}}>No API key — analysis won't work</span></>
+            }
+            <button className="apikey-btn" style={{marginLeft:4}} onClick={()=>setShowKeyInput(true)}>{apiKey?"Change Key":"Add Key"}</button>
+            {apiKey&&<button className="apikey-btn" onClick={testKey}>Test Key</button>}
+            <span style={{borderLeft:"1px solid var(--bdr)",marginLeft:8,paddingLeft:8}}>
+              {ebayServer
+                ? <><span className="apikey-ok"/><span style={{fontSize:11,color:"var(--dim)",marginLeft:4}}>eBay: Live</span></>
+                : <><span className="apikey-no"/><span style={{fontSize:11,color:"var(--dim)",marginLeft:4}}>eBay: Not configured</span></>
+              }
+            </span>
+          </div>
+        )}
+        <main className="main">
+
+          {/* ── MANIFESTS ── */}
+          {view==="manifests"&&(
+            <div style={{overflow:"auto",flex:1,minHeight:0}}>
+            <>
+              <div className="ph">
+                <div>
+                  <div className="pt">Manifests</div>
+                  <div style={{fontSize:13,color:"var(--dim)",marginTop:4}}>Upload pallet manifests to score, analyze, and compare bids.</div>
+                </div>
+                {cmpIds.length===2&&<button className="btn bp" onClick={()=>setView("compare")}>Compare Selected →</button>}
+              </div>
+              {err&&<div className="errbar">⚠ {err}</div>}
+              <div
+                className={`drop ${drag?"drag":""}`}
+                onClick={()=>xlsxReady&&fileRef.current.click()}
+                onDragOver={e=>{e.preventDefault();setDrag(true);}}
+                onDragLeave={()=>setDrag(false)}
+                onDrop={onDrop}
+              >
+                <div className="drop-ico">📦</div>
+                <div className="drop-ttl">{xlsxReady?"Drop manifest here or click to upload":"Loading file parser…"}</div>
+                <div className="drop-sub">Accepts .xlsx · .xls · .csv — needs: Item Name, Qty, Retail/MSRP columns</div>
+                <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{display:"none"}}
+                  onChange={e=>{processFile(e.target.files[0]);e.target.value="";}}/>
+              </div>
+              {manifests.length===0?(
+                <div className="empty">
+                  <div className="eico">📋</div>
+                  <div className="ettl">No manifests yet</div>
+                  <div>Upload your first pallet manifest above.</div>
+                </div>
+              ):(
+                <>
+                  {manifests.length>=2&&<div className="stsbar">✓ Click "+ Compare" on two manifests, then hit "Compare Selected →"</div>}
+                  <div className="cards">
+                    {manifests.map(m=>{
+                      const {g,cls}=gradeOf(m.scores.total);
+                      return (
+                        <div key={m.id} className={`card ${cmpIds.includes(m.id)?"sel":""}`} onClick={()=>open(m)}>
+                          <div className={`sbadge ${cls}`}>{m.scores.total}</div>
+                          <div className="card-name">{m.name}</div>
+                          <div className="card-meta">
+                            {m.date} · {m.items.length} items · Grade {g}{m.lotId&&<span style={{marginLeft:6,fontFamily:"var(--mono)",fontSize:11,color:"var(--dim)"}}>· {m.lotId}</span>}{m.askingPrice>0&&<span style={{marginLeft:6,fontFamily:"var(--mono)",fontSize:11,color:"var(--dim)"}}>· Ask: {f$(m.askingPrice)}</span>}
+                            {m.listingUrl&&<span style={{marginLeft:8}}><a href={m.listingUrl} target="_blank" rel="noopener noreferrer" style={{color:"var(--amber)",fontSize:11,fontFamily:"var(--mono)"}} onClick={e=>e.stopPropagation()}>↗ listing</a></span>}
+                          </div>
+                          <div className="cstats">
+                            <div className="cstat"><div className="cstat-l">Est. Revenue</div><div className="cstat-v g">{f$(m.scores.totalRevenue)}</div></div>
+                            <div className="cstat"><div className="cstat-l">Safe Max Bid</div><div className="cstat-v a">{f$(m.scores.maxBidSafe)}</div></div>
+                            <div className="cstat"><div className="cstat-l">Total MSRP</div><div className="cstat-v">{f$(m.scores.totalRetail)}</div></div>
+                            <div className="cstat"><div className="cstat-l">Anchor Items</div><div className="cstat-v">{m.scores.anchorCount}</div></div>
+                          </div>
+                          <div className="acts" onClick={e=>e.stopPropagation()}>
+                            <button className="btn bg" style={{fontSize:11,padding:"5px 12px"}} onClick={()=>toggleCmp(m.id)}>
+                              {cmpIds.includes(m.id)?"✓ In Compare":"+ Compare"}
+                            </button>
+                            <button className="btn bd" onClick={()=>delMf(m.id)}>Delete</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </>
+            </div>
+          )}
+
+          {/* ── ANALYSIS ── */}
+          {view==="analysis"&&active&&(()=>{
+            const m=active,s=m.scores;
+            const {g}=gradeOf(s.total);
+            const gc=s.total>=75?"var(--green)":s.total>=50?"var(--amber)":"var(--red)";
+            return (
+              <div className="analysis-wrap" ref={tableRef}>
+                <div className="ph" style={{marginBottom:8,paddingBottom:8,borderBottom:"1px solid var(--bdr)"}}>
+                    <div>
+                      <div className="pt">{m.name}<span>· Analysis</span></div>
+                      <div style={{fontSize:12,color:"var(--dim)",marginTop:4}}>{m.date} · {m.items.length} items{m.lotId&&<span style={{marginLeft:8,fontFamily:"var(--mono)",color:"var(--amber)"}}>Lot: {m.lotId}</span>}</div>
+                    </div>
+                    <button className="btn bg" onClick={()=>shareReport(m)}>📥 Download PDF</button>
+                  </div>
+
+                  {/* Dedupe Banner */}
+                {m.mergeLog&&m.mergeLog.length>0&&<MergeBanner log={m.mergeLog}/>}
+
+                  {/* Summary Panel */}
+                {(()=>{
+                  const ask=active.askingPrice||0;
+                  const anchRev=s.anchorRevenue||0;
+                  const anchPct=s.totalRevenue>0?Math.round((anchRev/s.totalRevenue)*100):0;
+                  let badge,headline,reason,badgeCls;
+                  if(s.total>=75&&s.avgDemand>=6&&s.highRiskCount<=3){
+                    badge="STRONG BUY";badgeCls="buy";
+                    headline="This pallet is worth pursuing aggressively.";
+                    reason="High demand ("+s.avgDemand.toFixed(1)+"/10 avg), "+s.anchorCount+" anchor item"+(s.anchorCount!==1?"s":"")+" covering "+anchPct+"% of revenue, and low overall risk. Anchor items alone should generate "+f$(anchRev)+".";
+                  } else if(s.total>=65){
+                    badge="GOOD BUY";badgeCls="buy";
+                    headline="Solid pallet with room for profit.";
+                    reason="Score of "+s.total+"/100 with "+s.anchorCount+" anchor item"+(s.anchorCount!==1?"s":"")+" generating "+f$(anchRev)+". Watch the "+s.highRiskCount+" high-risk item"+(s.highRiskCount!==1?"s":"")+" — price those conservatively or bundle them.";
+                  } else if(s.total>=50){
+                    badge="PROCEED WITH CAUTION";badgeCls="caution";
+                    headline="Could work, but negotiate hard on price.";
+                    reason="Average demand and "+s.highRiskCount+" high-risk item"+(s.highRiskCount!==1?"s":"")+" reduce confidence. Anchor items cover "+f$(anchRev)+" ("+anchPct+"% of revenue). Only bid at or below "+f$(s.maxBidSafe)+".";
+                  } else if(s.total>=35){
+                    badge="HIGH RISK";badgeCls="caution";
+                    headline="Weak pallet — only buy at a deep discount.";
+                    reason="Low demand and "+s.highRiskCount+" high-risk item"+(s.highRiskCount!==1?"s":"")+" make this tough to flip. Don't pay more than "+f$(s.maxBidSafe*0.7)+" — you need extra margin to absorb losses.";
+                  } else {
+                    badge="WALK AWAY";badgeCls="pass";
+                    headline="This pallet is not worth bidding on.";
+                    reason="Score of "+s.total+"/100 reflects poor demand, high risk, and weak anchor coverage. Estimated revenue of "+f$(s.totalRevenue)+" leaves almost no room for profit.";
+                  }
+                  if(ask>0&&ask>s.maxBidAgg){badge="WALK AWAY";badgeCls="pass";headline="Asking price is too high.";reason="At "+f$(ask)+", you'd be paying "+Math.round((ask/s.totalRevenue)*100)+"% of estimated revenue — well above the 60% aggressive ceiling of "+f$(s.maxBidAgg)+".";}
+                  return (
+                    <div className="summary-panel">
+                      <div className="summary-verdict">
+                        <div className={`verdict-badge ${badgeCls}`}>{badge}</div>
+                        <div className="verdict-text">
+                          <div className="verdict-headline">{headline}</div>
+                          <div className="verdict-reason">{reason}</div>
+                        </div>
+                        
+                      </div>
+                      {s.anchorItems&&s.anchorItems.length>0?(
+                        <div style={{marginTop:16,paddingTop:16,borderTop:"1px solid var(--bdr)"}}>
+                          <div className="anchor-summary" style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                            <span>⭐ <strong>{s.anchorCount} anchor item{s.anchorCount!==1?"s":""}</strong> projected to generate <strong style={{color:"var(--green)"}}>{f$(anchRev)}</strong> — {anchPct}% of total estimated revenue</span>
+                            <button onClick={()=>setSummaryOpen(o=>!o)} style={{background:"var(--amber)",border:"none",color:"#000",borderRadius:4,width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:18,lineHeight:1,flexShrink:0,fontWeight:700,boxShadow:"0 0 0 2px rgba(245,166,35,.3)"}}>{summaryOpen?"−":"+"}</button>
+                          </div>
+                          {summaryOpen&&<div className="anchor-grid">
+                            {s.anchorItems.map((item,idx)=>{
+                              const rev=item.retail*(item.resalePct||0.3)*item.qty;
+                              return (
+                                <div className="anchor-tile" key={idx} style={{cursor:"pointer"}} onClick={()=>{
+                                  const globalId=m.items.findIndex(it=>it.name===item.name&&it.isAnchor);
+                                  setHighlight(null);
+                                  requestAnimationFrame(()=>{
+                                    setHighlight({id:globalId,tick:Date.now()});
+                                    setTimeout(()=>{
+                                      const el=tableRef.current&&tableRef.current.querySelector(`[data-id="${globalId}"]`);
+                                      if(el)el.scrollIntoView({behavior:"smooth",block:"center"});
+                                    },50);
+                                    setTimeout(()=>setHighlight(null),2200);
+                                  });
+                                }}>
+                                  <div className="anchor-tile-name">{item.name}</div>
+                                  <div className="anchor-tile-rev">{f$(rev)}</div>
+                                  <div className="anchor-tile-meta">Qty {item.qty} · MSRP {f$(item.retail)} · {Math.round((item.resalePct||0.3)*100)}% resale · {item.marketplace}</div>
+                                </div>
+                              );
+                            })}
+                          </div>}
+                        </div>
+                      ):(
+                        <div style={{marginTop:16,paddingTop:16,borderTop:"1px solid var(--bdr)",display:"flex",alignItems:"center",gap:14}}>
+                          <span style={{fontSize:32,lineHeight:1}}>📦</span>
+                          <div>
+                            <div style={{fontFamily:"var(--disp)",fontWeight:700,fontSize:12,color:"var(--dim)",letterSpacing:".06em",marginBottom:4}}>NO ANCHOR ITEMS IDENTIFIED</div>
+                            <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.6}}>The AI didn't find any standout revenue drivers in this manifest. Revenue will depend on volume — sell in bundles or lots rather than individually, and negotiate the asking price down hard.</div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Lot ID + Asking Price + Listing URL bar */}
+                  <div className="asking-bar" style={{marginBottom:12}}>
+                    <div className="asking-field">
+                      <span className="asking-label">🏷 Lot ID</span>
+                      <div className="listing-dot"/>
+                      <input className="asking-input" type="text" placeholder="e.g. LOT-00421"
+                        style={{width:120,fontSize:13,fontWeight:400}}
+                        value={active.lotId||""}
+                        onChange={e=>updateLotId(active.id,e.target.value)}/>
+                    </div>
+                    <div className="asking-divider"/>
+                    <div className="asking-field">
+                      <span className="asking-label">💰 Asking Price</span>
+                      <div className="listing-dot"/>
+                      <span className="asking-prefix">$</span>
+                      <input className="asking-input" type="number" placeholder="0.00"
+                        value={active.askingPrice||""}
+                        onChange={e=>updateAskingPrice(active.id,e.target.value)}/>
+                    </div>
+                    {active.askingPrice>0&&(()=>{
+                      const ask=active.askingPrice,safe=s.maxBidSafe,agg=s.maxBidAgg,diff=safe-ask,pct=Math.round((ask/s.totalRevenue)*100);
+                      if(ask<=safe) return (<><div className="asking-divider"/><div className="asking-verdict"><span className="verdict-good">✓ Strong Buy</span><span className="verdict-sub">You're {f$(diff)} under your safe max · paying {pct}% of est. revenue</span></div></>);
+                      if(ask<=agg)  return (<><div className="asking-divider"/><div className="asking-verdict"><span className="verdict-warn">⚠ Proceed with Caution</span><span className="verdict-sub">Above safe bid by {f$(Math.abs(diff))} · paying {pct}% of est. revenue</span></div></>);
+                      return (<><div className="asking-divider"/><div className="asking-verdict"><span className="verdict-bad">✗ Walk Away</span><span className="verdict-sub">Overpaying by {f$(Math.abs(diff))} · paying {pct}% of est. revenue</span></div></>);
+                    })()}
+                    <div className="asking-divider"/>
+                    <div className="asking-field" style={{flex:1}}>
+                      <span className="asking-label">🔗 URL</span>
+                      <div className="listing-dot"/>
+                      <input className="listing-input" placeholder="Paste listing link…"
+                        value={active.listingUrl||""}
+                        onChange={e=>updateListingUrl(active.id,e.target.value)}/>
+                      {active.listingUrl&&<a className="listing-link" href={active.listingUrl} target="_blank" rel="noopener noreferrer">Open ↗</a>}
+                    </div>
+                  </div>
+
+                {/* Sticky top zone: summary bar + score breakdown only */}
+                <div className="sticky-zone" ref={stickyRef}>
+                  <div className="sbar">
+                    <div className="si"><div className="sl"><span className="tip-wrap">Total MSRP<Tip text="The combined retail value of every item in the pallet if sold brand new. Ignore this number — it's almost never realistic."/></span></div><div className="sv">{f$(s.totalRetail)}</div></div>
+                    <div className="sdiv"/>
+                    <div className="si"><div className="sl"><span className="tip-wrap">Est. Revenue<Tip text="What you'd realistically make selling everything in this pallet based on condition and market demand."/></span></div><div className="sv g">{f$(s.totalRevenue)}</div></div>
+                    <div className="sdiv"/>
+                    <div className="si"><div className="sl"><span className="tip-wrap">Safe Max Bid<Tip text="The most you should pay at auction — 50% of estimated revenue. This leaves room for unsellable items, fees, and slow movers."/></span></div><div className="sv a">{f$(s.maxBidSafe)}</div></div>
+                    <div className="si"><div className="sl"><span className="tip-wrap">Aggressive Bid<Tip text="A higher ceiling if you're confident in the pallet quality — 60% of estimated revenue. Only go here if you have strong anchor items and low risk scores."/></span></div><div className="sv b">{f$(s.maxBidAgg)}</div></div>
+                    <div className="sdiv"/>
+                    <div className="si">
+                      <div className="sl"><span className="tip-wrap">Manifest Score<Tip text="Overall pallet quality from 0–100 based on demand, anchor item density, risk, and margin potential. A = great buy, F = walk away."/></span></div>
+                      <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+                        <div className="sv" style={{color:gc,fontSize:28,lineHeight:1}}>{s.total}</div>
+                        <div style={{color:gc,fontFamily:"var(--disp)",fontSize:22,fontWeight:800}}>{g}</div>
+                      </div>
+                    </div>
+                    <div className="si"><div className="sl"><span className="tip-wrap">Anchor Items<Tip text="The high-value products that justify buying the pallet. A good pallet has at least 3–5 anchor items to absorb the cost of slower movers."/></span></div><div className="sv">{s.anchorCount} / {m.items.length}</div></div>
+                  </div>
+
+                  {/* Score breakdown */}
+                  <div className="spanel">
+                    <div className="spanel-ttl">Score Breakdown — {s.total} / 100</div>
+                    <div className="sgrid">
+                      {[
+                        {label:"Demand Quality",   val:s.dScore,max:30,tip:"Average demand score across all items. High = most items sell quickly. Low = slow-moving inventory that could sit for weeks."},
+                        {label:"Anchor Density",   val:s.aScore,max:25,tip:"How many high-value anchor items are in this pallet. Anchors justify the purchase price and absorb the cost of weaker items."},
+                        {label:"Risk Profile",     val:s.rScore,max:25,tip:"Weighted risk across all items. A good pallet has mostly low and medium risk — high risk items are damaged or hard to price."},
+                        {label:"Margin Potential", val:s.mScore,max:20,tip:"How well this pallet's estimated revenue compares to retail value. Benchmark is 40% of MSRP — higher is better."},
+                      ].map(sc=>(
+                        <div className="sitem" key={sc.label}>
+                          <div className="sitem-l"><span className="tip-wrap">{sc.label}<Tip text={sc.tip}/></span><span style={{float:"right"}}>{sc.max}pts</span></div>
+                          <div className="sbar2"><div className="sfill" style={{width:`${(sc.val/sc.max)*100}%`}}/></div>
+                          <div className="sitem-v">{sc.val}pts</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>{/* end sticky-zone */}
+
+                {/* Scrollable table */}
+                <div className="twrap">
+                  <style>{`.twrap thead th { top: ${stickyH}px; }`}</style>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th className={`sortable${sortCol==='anchor'?' sorted':''}`} onClick={()=>handleSort('anchor')}><span className="tip-wrap">⭐{sortCol==='anchor'?(sortDir==='desc'?' ↓':' ↑'):' ↕'}<Tip text="Anchor items are the high-value products that make a pallet worth buying. Sort to see your biggest opportunities first."/></span></th>
+                        <th>Img</th>
+                        <th className={`sortable${sortCol==='name'?' sorted':''}`} onClick={()=>handleSort('name')}><span className="tip-wrap">Item{sortCol==='name'?(sortDir==='desc'?' ↓':' ↑'):' ↕'}<Tip text="The product name from your manifest. Click to sort A–Z or Z–A."/></span></th>
+                        <th className={`sortable${sortCol==='qty'?' sorted':''}`} onClick={()=>handleSort('qty')}><span className="tip-wrap">Qty{sortCol==='qty'?(sortDir==='desc'?' ↓':' ↑'):' ↕'}<Tip text="How many units of this item are in the pallet."/></span></th>
+                        <th style={{width:70,minWidth:60}}><span className="tip-wrap">Cond<Tip text="Item condition as listed in the manifest."/></span></th>
+                        <th className={`sortable${sortCol==='retail'?' sorted':''}`} onClick={()=>handleSort('retail')}><span className="tip-wrap">MSRP{sortCol==='retail'?(sortDir==='desc'?' ↓':' ↑'):' ↕'}<Tip text="Manufacturer's Suggested Retail Price — what this sells for brand new in a store. Not what you'll get."/></span></th>
+                        <th><span className="tip-wrap" style={{color:"var(--amber)"}}>eBay Avg<Tip text="Average price from recently SOLD eBay listings for this item and condition. This is what buyers actually paid — not asking prices."/></span></th>
+                        <th className={`sortable${sortCol==='resalePct'?' sorted':''}`} onClick={()=>handleSort('resalePct')}><span className="tip-wrap">Resale %{sortCol==='resalePct'?(sortDir==='desc'?' ↓':' ↑'):' ↕'}<Tip text="The realistic fraction of MSRP you'll actually sell it for, based on condition and demand."/></span></th>
+                        <th className={`sortable${sortCol==='unitRev'?' sorted':''}`} onClick={()=>handleSort('unitRev')}><span className="tip-wrap">Unit Rev.{sortCol==='unitRev'?(sortDir==='desc'?' ↓':' ↑'):' ↕'}<Tip text="What you'll realistically pocket per unit after selling it — MSRP × Resale %."/></span></th>
+                        <th className={`sortable${sortCol==='totalRev'?' sorted':''}`} onClick={()=>handleSort('totalRev')}><span className="tip-wrap">Total Rev.{sortCol==='totalRev'?(sortDir==='desc'?' ↓':' ↑'):' ↕'}<Tip text="Unit revenue × quantity. Your expected gross from all units of this item."/></span></th>
+                        <th className={`sortable${sortCol==='demand'?' sorted':''}`} onClick={()=>handleSort('demand')}><span className="tip-wrap">Demand{sortCol==='demand'?(sortDir==='desc'?' ↓':' ↑'):' ↕'}<Tip text="How fast this typically sells on the resale market. 10 = sells same day. 1 = could sit for months."/></span></th>
+                        <th><span className="tip-wrap">Marketplace<Tip text="The best platform to sell this item. FB Marketplace = local pickup, no fees. eBay = ships nationwide. Flea Market = offload slow movers cheap."/></span></th>
+                        <th className={`sortable${sortCol==='risk'?' sorted':''}`} onClick={()=>handleSort('risk')}><span className="tip-wrap">Risk{sortCol==='risk'?(sortDir==='desc'?' ↓':' ↑'):' ↕'}<Tip text="Overall risk rating for this item. High risk = damaged, slow-moving, or hard to price. Low risk = clean, fast seller."/></span></th>
+                        <th><span className="tip-wrap">Notes<Tip text="A practical tip or warning from the AI about this specific item — recalls, pricing traps, or resale advice."/></span></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedItems(m.items).map(item=>{
+                        const uRev=item.retail*item.resalePct;
+                        const tRev=uRev*item.qty;
+                        const mp=mpTag(item.marketplace);
+                        const rk=riskOf(item.risk);
+                        return (
+                          <tr key={item.id} data-id={item.id}>
+                            <td style={{width:28}}>{item.isAnchor?"⭐":""}</td>
+                            <td style={{width:60}}>
+                              <ProductImage name={item.name} category={item.category}/>
+                            </td>
+                            <td><div className="iname">{item.name}</div></td>
+                            <td><span className="mono" style={{color:"var(--dim)"}}>{item.qty}</span></td>
+                            <td style={{width:70}}><span style={{fontSize:10,fontWeight:600,letterSpacing:".04em",textTransform:"uppercase",color:"var(--dim)"}}>{item.condition||"—"}</span></td>
+                            <td><span className="mono">{f$(item.retail)}</span></td>
+                            <td>
+                              {item.ebayAvg
+                                ? <span className="mono" style={{color:"var(--amber)",fontWeight:600}}>{f$(item.ebayAvg)}<span style={{fontSize:9,color:"var(--dim)",marginLeft:3}}>{item.ebayCount} listings</span></span>
+                                : <span style={{fontSize:10,color:"var(--muted)"}}>—</span>
+                              }
+                            </td>
+                            <td><span className="mono" style={{color:"var(--amber)"}}>{fP(item.resalePct)}</span></td>
+                            <td><span className="mono">{f$(uRev)}</span></td>
+                            <td><span className="mono" style={{color:"var(--green)",fontWeight:600}}>{f$(tRev)}</span></td>
+                            <td>
+                              <div className="dbar">
+                                <div className="dbg"><div className="dbf" style={{width:`${item.demand*10}%`,background:dColor(item.demand)}}/></div>
+                                <span style={{fontSize:11,color:"var(--dim)",fontFamily:"var(--mono)"}}>{item.demand}/10</span>
+                              </div>
+                            </td>
+                            <td><span className={`tag ${mp.cls}`}>{mp.label}</span></td>
+                            <td><span className={`risk ${rk.cls}`}>{rk.label}</span></td>
+                            <td><div className="notecell">{item.notes}</div></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>{/* end twrap */}
+              </div>
+            );
+          })()}
+
+          {/* ── COMPARE ── */}
+          {view==="compare"&&(
+            <div style={{overflow:"auto",flex:1,minHeight:0}}>
+              <div className="ph" style={{marginBottom:20}}>
+                <div className="pt">Side-by-Side Comparison</div>
+              </div>
+              {cmpPair.length===2?(()=>{
+                const [a,b]=cmpPair;
+                const rows=[
+                  {label:"Manifest Score",       va:a.scores.total,        vb:b.scores.total,        fmt:v=>v+" / 100",hi:true},
+                  {label:"Total MSRP",           va:a.scores.totalRetail,  vb:b.scores.totalRetail,  fmt:f$,           hi:true},
+                  {label:"Est. Revenue",         va:a.scores.totalRevenue, vb:b.scores.totalRevenue, fmt:f$,           hi:true},
+                  {label:"Safe Max Bid (50%)",   va:a.scores.maxBidSafe,   vb:b.scores.maxBidSafe,   fmt:f$,           hi:false},
+                  {label:"Aggressive Bid (60%)", va:a.scores.maxBidAgg,    vb:b.scores.maxBidAgg,    fmt:f$,           hi:false},
+                  {label:"Avg Demand",           va:a.scores.avgDemand,    vb:b.scores.avgDemand,    fmt:v=>Number(v).toFixed(1)+" / 10",hi:true},
+                  {label:"Anchor Items",         va:a.scores.anchorCount,  vb:b.scores.anchorCount,  fmt:v=>v+" items",hi:true},
+                  {label:"Total Items",          va:a.items.length,        vb:b.items.length,        fmt:v=>v+" items",hi:false},
+                ];
+                return (
+                  <div className="cgrid">
+                    {[a,b].map((m,idx)=>{
+                      const {g}=gradeOf(m.scores.total);
+                      return (
+                        <div className="ccard" key={m.id}>
+                          <div className="chead">
+                            <div className="cname">{m.name}</div>
+                            <div style={{fontSize:12,color:"var(--dim)",marginTop:2}}>{m.date} · {m.items.length} items · Grade {g}</div>
+                          </div>
+                          {rows.map(r=>{
+                            const myV=idx===0?r.va:r.vb;
+                            const otV=idx===0?r.vb:r.va;
+                            const better=r.hi?myV>otV:myV<otV;
+                            return (
+                              <div className="crow" key={r.label}>
+                                <div className="crow-l">{r.label}</div>
+                                <div className={`crow-v ${better?"win":"lose"}`}>{better?"✓ ":""}{r.fmt(myV)}</div>
+                              </div>
+                            );
+                          })}
+                          <div style={{padding:"12px 16px"}}>
+                            <button className="btn bp" style={{width:"100%"}} onClick={()=>open(m)}>View Full Analysis →</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })():(
+                <div className="empty">
+                  <div className="eico">⚖️</div>
+                  <div className="ettl">Select 2 Manifests to Compare</div>
+                  <div>Go to Manifests and click "+ Compare" on two pallets.</div>
+                  <button className="btn bp" style={{marginTop:16}} onClick={()=>setView("manifests")}>← Go to Manifests</button>
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+
+      </div>
+
+      {loading&&(
+        <div className="lov">
+          <ForkliftScene progress={progress}/>
+        </div>
+      )}
+    </>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App));
+  </script>
+</body>
+</html>
