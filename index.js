@@ -93,8 +93,10 @@ app.get('/ebay/search', async (req, res) => {
     }
 
     prices.sort((a, b) => a - b);
-    const trim = Math.max(1, Math.floor(prices.length * 0.1));
-    const trimmed = prices.slice(trim, prices.length - trim);
+    // Only trim outliers if we have enough prices to do so meaningfully
+    const trimmed = prices.length >= 6
+      ? prices.slice(Math.floor(prices.length * 0.1), prices.length - Math.floor(prices.length * 0.1))
+      : prices;
     const avg = trimmed.reduce((a, b) => a + b, 0) / trimmed.length;
 
     return res.json({
