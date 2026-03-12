@@ -672,65 +672,10 @@ Each object must have exactly these fields:
 
 
 // ── eBay Browse API Enrichment ────────────────────────────────────────────────
-// ── eBay Finding API — direct JSONP (no proxy needed) ────────────────────────
-function ebayFindSold(query, condition, appId) {
-  return new Promise((resolve) => {
-    const cbName = 'ebay_cb_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-    const timeout = setTimeout(() => {
-      delete window[cbName];
-      if (script.parentNode) script.parentNode.removeChild(script);
-      resolve(null);
-    }, 12000);
-
-    window[cbName] = (data) => {
-      clearTimeout(timeout);
-      delete window[cbName];
-      if (script.parentNode) script.parentNode.removeChild(script);
-      try {
-        const items = data?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item;
-        if (!items || items.length === 0) { resolve(null); return; }
-        const prices = items
-          .filter(i => i.sellingStatus?.[0]?.currentPrice?.[0]?.__value__)
-          .map(i => parseFloat(i.sellingStatus[0].currentPrice[0].__value__))
-          .filter(p => p > 0);
-        if (prices.length === 0) { resolve(null); return; }
-        prices.sort((a, b) => a - b);
-        const trim = Math.max(1, Math.floor(prices.length * 0.1));
-        const trimmed = prices.slice(trim, prices.length - trim);
-        const avg = trimmed.reduce((a, b) => a + b, 0) / trimmed.length;
-        resolve({ found: true, avg: Math.round(avg * 100) / 100, min: prices[0], max: prices[prices.length - 1], count: prices.length });
-      } catch(e) { resolve(null); }
-    };
-
-    // Build condition filter
-    const condLower = (condition || '').toLowerCase();
-    let condFilter = '';
-    if (condLower.includes('new') && !condLower.includes('open')) condFilter = '&itemFilter(1).name=Condition&itemFilter(1).value=New';
-    else if (condLower.includes('open')) condFilter = '&itemFilter(1).name=Condition&itemFilter(1).value=New+other+(see+details)';
-    else if (condLower.includes('used') || condLower.includes('good') || condLower.includes('fair')) condFilter = '&itemFilter(1).name=Condition&itemFilter(1).value=Used';
-
-    const url = `https://svcs.ebay.com/services/search/FindingService/v1` +
-      `?OPERATION-NAME=findCompletedItems` +
-      `&SERVICE-VERSION=1.0.0` +
-      `&SECURITY-APPNAME=${appId}` +
-      `&RESPONSE-DATA-FORMAT=JSON` +
-      `&callback=${cbName}` +
-      `&restPayload=true` +
-      `&keywords=${encodeURIComponent(query)}` +
-      `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
-      condFilter +
-      `&paginationInput.entriesPerPage=15` +
-      `&sortOrder=EndTimeSoonest`;
-
-    const script = document.createElement('script');
-    script.src = url;
-    script.onerror = () => { clearTimeout(timeout); delete window[cbName]; resolve(null); };
-    document.head.appendChild(script);
-  });
-}
-
-async function enrichWithEbay(items, appId, onProgress) {
-  if (!appId) return {};
+// ── eBay enrichment via Render proxy ─────────────────────────────────────────
+async function enrichWithEbay(items, serverUrl, onProgress) {
+  if (!serverUrl) return {};
+  const base = serverUrl.replace(/\/$/, '');
   const results = {};
   const CONCURRENCY = 3;
   const chunks = [];
@@ -740,8 +685,13 @@ async function enrichWithEbay(items, appId, onProgress) {
   for (const chunk of chunks) {
     await Promise.all(chunk.map(async (item) => {
       try {
-        const d = await ebayFindSold(item.name, item.condition || '', appId);
-        if (d && d.found) results[item.name] = d;
+        const url = `${base}/ebay/search?q=${encodeURIComponent(item.name)}&condition=${encodeURIComponent(item.condition||'')}&limit=15`;
+        const res = await fetch(url, { mode: 'cors' });
+        if (res.ok) {
+          const d = await res.json();
+          console.log('[eBay]', item.name, '->', d);
+          if (d.found) results[item.name] = d;
+        }
       } catch(e) {
         console.warn('eBay lookup failed for', item.name, e.message);
       }
@@ -749,6 +699,7 @@ async function enrichWithEbay(items, appId, onProgress) {
       if (onProgress) onProgress(done / items.length);
     }));
   }
+  console.log('[eBay] Final results keys:', Object.keys(results));
   return results;
 }
 
@@ -1175,8 +1126,8 @@ function App() {
             <span style={{whiteSpace:"nowrap"}}>🔑 Anthropic API Key:</span>
             <input className="apikey-input" type="password" placeholder="sk-ant-..." value={apiKey} onChange={e=>setApiKey(e.target.value.trim().replace(/[^\x20-\x7E]/g,""))} autoFocus/>
             {apiKey?<span className="apikey-ok" title="Key saved"/>:<span className="apikey-no" title="No key"/>}
-            <span style={{color:"var(--muted)",fontSize:11,marginLeft:8,whiteSpace:"nowrap"}}>🛒 eBay App ID:</span>
-            <input className="apikey-input" type="text" placeholder="DerrickI-PalletIQ-PRD-..." value={ebayServer} onChange={e=>setEbayServer(e.target.value.trim())}/>
+            <span style={{color:"var(--muted)",fontSize:11,marginLeft:8,whiteSpace:"nowrap"}}>🛒 eBay Server:</span>
+            <input className="apikey-input" type="text" placeholder="https://palletiq-webhook.onrender.com" value={ebayServer} onChange={e=>setEbayServer(e.target.value.trim())}/>
             {ebayServer?<span className="apikey-ok" title="eBay server set"/>:<span className="apikey-no" title="No eBay server"/>}
             <span style={{color:"var(--muted)",fontSize:11}}>Saved to browser.</span>
             <button className="apikey-btn" onClick={()=>setShowKeyInput(false)}>Done</button>
