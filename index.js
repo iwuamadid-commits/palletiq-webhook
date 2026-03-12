@@ -52,57 +52,46 @@ app.get('/ebay/search', async (req, res) => {
     const { q, condition = '', limit = 15 } = req.query;
     if (!q) return res.status(400).json({ error: 'Missing q parameter' });
 
-    // Map condition string to eBay Finding API condition filter (use index 1 to avoid collision with SoldItemsOnly at index 0)
+    const token = await getEbayToken();
+
     const condLower = condition.toLowerCase();
-    let conditionFilter = '';
+    let condFilter = '';
     if (condLower.includes('new') && !condLower.includes('open')) {
-      conditionFilter = '&itemFilter(1).name=Condition&itemFilter(1).value(0)=1000';
+      condFilter = ',conditions:{NEW}';
     } else if (condLower.includes('open')) {
-      conditionFilter = '&itemFilter(1).name=Condition&itemFilter(1).value(0)=1500&itemFilter(1).value(1)=1750';
+      condFilter = ',conditions:{LIKE_NEW|OPEN_BOX}';
     } else if (condLower.includes('dam') || condLower.includes('brok') || condLower.includes('part')) {
-      conditionFilter = '&itemFilter(1).name=Condition&itemFilter(1).value(0)=7000';
+      condFilter = ',conditions:{FOR_PARTS_OR_NOT_WORKING}';
     } else if (condLower.includes('used') || condLower.includes('good') || condLower.includes('fair')) {
-      conditionFilter = '&itemFilter(1).name=Condition&itemFilter(1).value(0)=3000&itemFilter(1).value(1)=4000&itemFilter(1).value(2)=5000&itemFilter(1).value(3)=6000';
+      condFilter = ',conditions:{USED_EXCELLENT|USED_VERY_GOOD|USED_GOOD|USED_ACCEPTABLE}';
     }
 
-    // findCompletedItems + SoldItemsOnly=true = only actually sold listings
-    const url = `https://svcs.ebay.com/services/search/FindingService/v1` +
-      `?OPERATION-NAME=findCompletedItems` +
-      `&SERVICE-VERSION=1.0.0` +
-      `&SECURITY-APPNAME=${EBAY_CLIENT_ID}` +
-      `&RESPONSE-DATA-FORMAT=JSON` +
-      `&keywords=${encodeURIComponent(q)}` +
-      `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
-      conditionFilter +
-      `&paginationInput.entriesPerPage=${limit}` +
-      `&sortOrder=EndTimeSoonest`;
+    const filter = `buyingOptions:{FIXED_PRICE}${condFilter}`;
+    const url = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(q)}&limit=${limit}&filter=${encodeURIComponent(filter)}`;
 
-    console.log(`[eBay] Searching sold: "${q}"`);
-    const ebayRes = await fetch(url);
+    const ebayRes = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+        'Content-Type': 'application/json'
+      }
+    });
+
     const data = await ebayRes.json();
 
-    const searchResult = data?.findCompletedItemsResponse?.[0]?.searchResult?.[0];
-    const items = searchResult?.item;
-    const totalEntries = data?.findCompletedItemsResponse?.[0]?.paginationOutput?.[0]?.totalEntries?.[0];
-
-    console.log(`[eBay] Total entries: ${totalEntries}, Items returned: ${items?.length || 0}`);
-
-    if (!items || items.length === 0) {
+    if (!data.itemSummaries || data.itemSummaries.length === 0) {
       return res.json({ found: false, avg: null, min: null, max: null, count: 0 });
     }
 
-    const prices = items
-      .filter(i => i.sellingStatus?.[0]?.currentPrice?.[0]?.__value__)
-      .map(i => parseFloat(i.sellingStatus[0].currentPrice[0].__value__))
+    const prices = data.itemSummaries
+      .filter(i => i.price?.value)
+      .map(i => parseFloat(i.price.value))
       .filter(p => p > 0);
-
-    console.log(`[eBay] Prices extracted: ${prices.length}`);
 
     if (prices.length === 0) {
       return res.json({ found: false, avg: null, min: null, max: null, count: 0 });
     }
 
-    // Remove extreme outliers (top and bottom 10%)
     prices.sort((a, b) => a - b);
     const trim = Math.max(1, Math.floor(prices.length * 0.1));
     const trimmed = prices.slice(trim, prices.length - trim);
@@ -122,26 +111,7 @@ app.get('/ebay/search', async (req, res) => {
   }
 });
 
-// ── eBay Debug — returns raw Finding API response ─────────────────────────
-app.get('/ebay/debug', async (req, res) => {
-  const q = req.query.q || 'ipad pro';
-  const url = `https://svcs.ebay.com/services/search/FindingService/v1` +
-    `?OPERATION-NAME=findCompletedItems` +
-    `&SERVICE-VERSION=1.0.0` +
-    `&SECURITY-APPNAME=${EBAY_CLIENT_ID}` +
-    `&RESPONSE-DATA-FORMAT=JSON` +
-    `&keywords=${encodeURIComponent(q)}` +
-    `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
-    `&paginationInput.entriesPerPage=3`;
-  try {
-    const r = await fetch(url);
-    const text = await r.text();
-    res.set('Content-Type', 'application/json');
-    res.send(text);
-  } catch(e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+
 
 
 app.get('/ebay/deletion', (req, res) => {
